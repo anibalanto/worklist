@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::BufRead;
+use std::path::PathBuf;
 use std::process::Command;
+use worklist::check_push::check_one;
+use worklist::provider::FileProvider;
 
 #[derive(Parser)]
 #[command(name = "worklist")]
@@ -17,13 +21,84 @@ enum Cmd {
         #[arg(long, default_value = "origin")]
         remote: String,
     },
+    /// El compare-and-swap de una ventana. Pensado para `hooks/pre-receive`.
+    CheckPush {
+        #[arg(long)]
+        provider_file: PathBuf,
+        /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo de pre-receive.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Manipula el proveedor de prueba directamente, sin pasar por git.
+    Provider {
+        #[command(subcommand)]
+        sub: ProviderCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProviderCmd {
+    SetStatus {
+        #[arg(long)]
+        provider_file: PathBuf,
+        clave: String,
+        status: String,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Cmd::Push { rama, remote } => push(rama, remote),
+        Cmd::CheckPush { provider_file, stdin } => cmd_check_push(provider_file, stdin),
+        Cmd::Provider { sub: ProviderCmd::SetStatus { provider_file, clave, status } } => {
+            let provider = FileProvider::new(provider_file);
+            let old = provider.set_status(&clave, &status)?;
+            match old {
+                Some(old) => println!("{clave}: {old} -> {status}"),
+                None => println!("{clave}: (nuevo) -> {status}"),
+            }
+            Ok(())
+        }
     }
+}
+
+fn cmd_check_push(provider_file: PathBuf, stdin: bool) -> Result<()> {
+    let provider = FileProvider::new(provider_file);
+    let repo = std::env::current_dir()?;
+
+    let lines: Vec<(String, String, String)> = if stdin {
+        let mut out = Vec::new();
+        for line in std::io::stdin().lock().lines() {
+            let line = line?;
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() != 3 {
+                anyhow::bail!("linea invalida, se esperaba '<viejo> <nuevo> <ref>': {line}");
+            }
+            out.push((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()));
+        }
+        out
+    } else {
+        let head = rev_parse("HEAD")?;
+        let branch = current_branch()?;
+        vec![(head.clone(), head, format!("refs/heads/{branch}"))]
+    };
+
+    let mut any_rejected = false;
+    for (old, _new, refname) in lines {
+        let rejected = check_one(&repo, &old, &refname, &provider)?;
+        for r in rejected {
+            any_rejected = true;
+            println!(
+                "reject: {} status era \"{}\" en el tip, el proveedor dice \"{}\"",
+                r.key, r.tip_status, r.live_status
+            );
+        }
+    }
+    if any_rejected {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn current_branch() -> Result<String> {

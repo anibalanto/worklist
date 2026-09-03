@@ -1,0 +1,19 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+    accepted:
+    - agree:
+      - test
+      link: capture 132c2c37811269222704f1ef30610f3a
+      hash: 0ee92045a178a27e147c622308ca41954e56da7322abe94c7aef9b82bbb38a1f
+  1:
+    link: capture 6305288206973c51dae37373dcbde4f5
+    accepted:
+    - agree:
+      - test
+      link: capture 6305288206973c51dae37373dcbde4f5
+      hash: 62abbfa8bd7fedf5038d3662c09d9f17f8b006fbcd538e2b8c0b4372153aa071
+      hash_ast: 7b6d3722eeab9f1ce2f8c1fb7ba606014883abdbaa4275d335f006282d575db4
+      n: declined
+    name: topo_order

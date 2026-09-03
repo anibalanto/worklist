@@ -1,9 +1,14 @@
 //! Nucleo de la sincronizacion por ventana: renombrar un item sin clave de
-//! proveedor y reescribir todo lo que lo nombraba, en un solo commit.
+//! proveedor y reescribir todo lo que lo nombraba, en un solo commit; y el
+//! compare-and-swap que decide si un push a una ventana se acepta.
 //!
-//! No habla con ningun proveedor. Quien asigna la clave nueva es quien llama
-//! a `resolve_batch`, vía el trait `IdAssigner` — la integracion real con
-//! Jira vive en otro lugar (ver la spec de `worklist push` y el hook).
+//! `resolve_batch` no habla con ningun proveedor: quien asigna la clave nueva
+//! es quien la llama, pasandole el mapa ya resuelto. `check_push` si habla
+//! con uno, vía el puerto `Provider` — la integracion real con Jira es otra
+//! implementacion del mismo trait.
+
+pub mod check_push;
+pub mod provider;
 
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;

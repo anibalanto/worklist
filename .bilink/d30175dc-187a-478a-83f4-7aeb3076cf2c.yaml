@@ -1,0 +1,7 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+  1:
+    link: capture 82032967c22c928fc2c2e9fdaac6fb80
+    name: cmd_check_push
