@@ -1,20 +1,21 @@
-//! Lo que se puede probar sin tocar Jira: el escapado de JQL, y que
-//! `--dry-run` no llama a `acli`. El create-or-find real contra un board
-//! necesita permiso explícito — no corre en CI.
+//! Lo que se puede probar sin tocar Jira: el texto con el que se busca, la
+//! lectura del resultado del proveedor, y que `--dry-run` no llama a `acli`.
+//! El create-or-find real contra un board necesita permiso explícito — no
+//! corre en CI.
 
-use worklist::creator::{dry_run_plan, escape_jql, jira_type, search_text};
+use worklist::creator::{dry_run_plan, jira_type, search_text};
 
-#[test]
-fn escapa_comillas_y_backslash() {
-    assert_eq!(escape_jql(r#"El card "Acceso al Portal""#), r#"El card \"Acceso al Portal\""#);
-    assert_eq!(escape_jql(r"ruta\archivo"), r"ruta\\archivo");
-    assert_eq!(escape_jql("sin nada especial"), "sin nada especial");
-}
-
+/// Ya no hay nada que escapar: el texto de busqueda no puede contener una
+/// comilla, porque no es alfanumerica. La query sale sin metacaracteres en vez
+/// de con metacaracteres escapados.
 #[test]
 fn un_titulo_con_comillas_no_rompe_el_jql_generado() {
     let plan = dry_run_plan("ACC", "task", r#"El card "raro""#, "Fuente: x.task.md").unwrap();
-    assert!(plan.contains(r#"summary ~ "El card \"raro\"""#));
+    let search_line = plan.lines().next().unwrap();
+    assert!(search_line.contains(r#"summary ~ "El card raro""#), "{search_line}");
+    assert!(!search_line.contains('\\'), "no hace falta escapar nada: {search_line}");
+    // El titulo real, en cambio, viaja entero en `--summary`.
+    assert!(plan.contains(r#"--summary "El card \"raro\"""#), "{plan}");
 }
 
 #[test]
@@ -31,7 +32,7 @@ fn corchetes_se_neutralizan_para_la_busqueda() {
     // Confirmado contra Jira real: "summary ~ \"[prueba] algo\"" no parsea,
     // aunque las comillas esten bien escapadas. `[`/`]` no tienen forma
     // valida de escaparse en JQL (`\[` es una secuencia ilegal).
-    assert_eq!(search_text("[prueba] algo"), " prueba  algo");
+    assert_eq!(search_text("[prueba] algo"), "prueba algo");
     assert!(!search_text("[prueba] algo").contains('['));
     assert!(!search_text("[prueba] algo").contains(']'));
 }
@@ -100,4 +101,37 @@ fn an_output_without_a_batch_shape_is_not_a_failure() {
 fn an_empty_batch_passes() {
     let v: serde_json::Value = serde_json::from_str(r#"{"results":[],"successCount":0}"#).unwrap();
     assert!(worklist::creator::check_batch(&v, "edit").is_ok());
+}
+
+/// El defecto de `5l`: `*` es un comodin del full-text y `refs/bilink/*`
+/// devolvia cero sobre un issue que existia, asi que el reintento duplicaba.
+/// No se escapa: se busca por lo alfanumerico, que es seguro por construccion.
+#[test]
+fn the_search_text_keeps_only_what_no_parser_can_choke_on() {
+    let t = "Índice git propio y refspecs de `refs/bilink/*`";
+    assert_eq!(search_text(t), "Índice git propio y refspecs de refs bilink");
+    for c in ['*', '`', '/', '[', ']', '"', '\\', '~', '?', ':'] {
+        assert!(!search_text(t).contains(c), "quedo un {c:?}");
+    }
+}
+
+/// Los acentos se conservan: el full-text **no** los normaliza, asi que
+/// buscar "Indice" no encuentra un issue titulado "Índice".
+#[test]
+fn the_search_text_keeps_the_accents() {
+    assert!(search_text("Índice de migración").contains('Í'));
+    assert!(search_text("Índice de migración").contains('ó'));
+}
+
+/// Un titulo hecho solo de simbolos no deja con que buscar. Eso no puede
+/// mandarse como query, y crear a ciegas seria duplicar por otro camino.
+#[test]
+fn a_title_with_nothing_alphanumeric_leaves_no_query() {
+    assert_eq!(search_text("*** --- ///"), "");
+}
+
+/// Y no abre ni cierra con espacio: dos separadores seguidos son uno.
+#[test]
+fn the_search_text_does_not_pad_with_spaces() {
+    assert_eq!(search_text("`hola`  --  `chau`"), "hola chau");
 }

@@ -53,28 +53,36 @@ pub trait Creator {
     fn link_blocks(&self, blocker: &str, blocked: &str) -> Result<bool>;
 }
 
-/// Escapa un titulo para entrar en un JQL `summary ~ "..."`: backslash y
-/// comillas dobles, que son los dos caracteres que rompen la query si van
-/// crudos. Sin esto, un titulo real con comillas rompe la busqueda en
-/// silencio y el reintento duplica — el defecto que motiva este modulo.
-pub fn escape_jql(title: &str) -> String {
-    title.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// `summary ~` no compara texto literal: es full-text search, y `[`/`]`
-/// rompen su parser aunque vayan entre comillas — JQL no tiene forma de
-/// escaparlos (`\[` es una secuencia ilegal). Confirmado contra Jira real:
-/// "[prueba] algo" falla, "prueba algo" no. Se neutralizan con un espacio
-/// antes de escapar comillas — el texto de busqueda deja de ser exacto,
-/// nunca el titulo real que `--summary` usa en la creacion.
+/// El texto con el que se **busca**, que no es el titulo.
+///
+/// `summary ~` no compara texto literal: es full-text, y su parser tiene
+/// metacaracteres. `[` y `]` lo rompen aunque vayan entre comillas —JQL no
+/// tiene como escaparlos, `\[` es ilegal— y `*` es un comodin que en
+/// `refs/bilink/*` devuelve cero resultados sobre un issue que existe.
+///
+/// **Escapar de a un caracter es perder la carrera**: el que falta se descubre
+/// duplicando un issue. Por eso se busca por un subconjunto seguro **por
+/// construccion** —solo alfanumericos y espacios— y la decision la toma
+/// `search` comparando el `summary` entero. La query busca de mas; la que
+/// decide es una comparacion que no pasa por ningun parser.
+///
+/// Los acentos se conservan: son alfanumericos y el full-text **no** los
+/// normaliza — "Indice" no encuentra un issue titulado "Índice".
 pub fn search_text(title: &str) -> String {
-    escape_jql(&title.replace(['[', ']'], " "))
+    let mut out = String::with_capacity(title.len());
+    let mut space = true; // arranca en true para no abrir con espacio
+    for c in title.chars() {
+        if c.is_alphanumeric() {
+            out.push(c);
+            space = false;
+        } else if !space {
+            out.push(' ');
+            space = true;
+        }
+    }
+    out.trim_end().to_string()
 }
 
-/// El tipo de un item es del vocabulario del worklist — `task`, `user-story`,
-/// `epic` — y quien habla acli lo traduce al de Jira, que es por proyecto.
-/// Confirmado contra `ACC`: sus tipos estan localizados, y un `Task` en
-/// ingles no existe ahi.
 pub fn jira_type(worklist_type: &str) -> Result<&'static str> {
     match worklist_type {
         "task" => Ok("Tarea"),
@@ -171,7 +179,18 @@ impl AcliCreator {
         )
     }
 
+    /// La clave del issue cuyo `summary` es **exactamente** este titulo.
+    ///
+    /// La JQL busca de mas a proposito: lleva solo los alfanumericos del
+    /// titulo, asi que ningun metacaracter llega al parser. Quien decide es la
+    /// comparacion de aca abajo. Ver `search_text`.
     fn search(&self, title: &str) -> Result<Option<String>> {
+        let needle = search_text(title);
+        if needle.is_empty() {
+            // Sin nada alfanumerico no hay query posible, y crear a ciegas
+            // seria duplicar por otro camino.
+            bail!("el titulo {title:?} no tiene con que buscarse: no deja ningun alfanumerico");
+        }
         let jql = self.jql(title);
         let parsed = acli_json(
             &["jira", "workitem", "search", "--jql", &jql, "--json"],
@@ -179,8 +198,15 @@ impl AcliCreator {
         )?;
         let key = parsed
             .as_array()
-            .and_then(|arr| arr.first())
-            .and_then(|first| first.get("key"))
+            .into_iter()
+            .flatten()
+            .find(|item| {
+                item.get("fields")
+                    .and_then(|f| f.get("summary"))
+                    .and_then(|s| s.as_str())
+                    == Some(title)
+            })
+            .and_then(|item| item.get("key"))
             .and_then(|k| k.as_str())
             .map(|s| s.to_string());
         Ok(key)
