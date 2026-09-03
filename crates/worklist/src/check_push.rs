@@ -6,7 +6,6 @@ use crate::provider::{key_of_filename, status_of, Provider};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 pub struct RejectedKey {
     pub key: String,
@@ -21,9 +20,7 @@ fn is_window_ref(refname: &str) -> bool {
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let out = crate::git_command(repo)
         .args(args)
         .output()
         .with_context(|| format!("corriendo git {:?}", args))?;

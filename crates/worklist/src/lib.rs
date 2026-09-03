@@ -7,6 +7,7 @@
 //! con uno, vía el puerto `Provider` — la integracion real con Jira es otra
 //! implementacion del mismo trait.
 
+pub mod assign;
 pub mod check_push;
 pub mod creator;
 pub mod provider;
@@ -195,10 +196,31 @@ pub fn topo_order(repo: &Path, slugs: &[String]) -> Result<Vec<String>> {
     Ok(order)
 }
 
+/// `git -C <repo>`, con el entorno de git **limpiado**.
+///
+/// Un hook de recepción hereda `GIT_DIR=.` y a veces `GIT_WORK_TREE`, y esas
+/// variables le ganan al `-C`: cualquier git que corra desde otro directorio
+/// —un worktree temporal, por ejemplo— resuelve contra el repo equivocado y
+/// falla con *"no es un repositorio git"*. Sacarlas acá y no en el script del
+/// hook es lo que hace que la librería no dependa de quién la llama.
+pub(crate) fn git_command(repo: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 fn git(repo: &Path, args: &[&str]) -> Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let status = git_command(repo)
         .args(args)
         .status()
         .with_context(|| format!("corriendo git {:?}", args))?;

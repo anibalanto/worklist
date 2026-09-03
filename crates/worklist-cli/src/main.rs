@@ -29,6 +29,17 @@ enum Cmd {
         #[command(subcommand)]
         sub: ProviderCmd,
     },
+    /// Resuelve los pedidos de una ventana: clave, renombre y reescritura.
+    /// Pensado para `hooks/post-receive`.
+    AssignKeys {
+        #[arg(long)]
+        project: String,
+        /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo del hook.
+        #[arg(long)]
+        stdin: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Busca un issue por titulo antes de crear, para no duplicar en un reintento.
     CreateOrFind {
         #[arg(long)]
@@ -67,6 +78,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::AssignKeys { project, stdin, dry_run } => cmd_assign_keys(project, stdin, dry_run),
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             let description = format!("Fuente: {source}");
             if dry_run {
@@ -79,6 +91,61 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn cmd_assign_keys(project: String, stdin: bool, dry_run: bool) -> Result<()> {
+    let repo = std::env::current_dir()?;
+    let creator = AcliCreator::new(project);
+
+    let lines = read_hook_lines(stdin)?;
+    for (_old, new, refname) in lines {
+        if !(refname.starts_with("refs/heads/sprint/") || refname == "refs/heads/backlog") {
+            continue;
+        }
+        let source = |slug: &str| format!("Fuente: {slug} en el worklist");
+        let r = worklist::assign::assign_window(
+            &repo, &refname, &new, &source, &creator, dry_run,
+        )?;
+        let Some(r) = r else {
+            println!("{refname}: sin pedidos");
+            continue;
+        };
+        println!("{}: {} pedido(s)", r.refname, r.assigned.len());
+        println!("  orden: {}", r.order.join(", "));
+        for a in &r.assigned {
+            if a.rewritten > 0 {
+                println!("  {} -> {}  ({} refs reescritas)", a.slug, a.key, a.rewritten);
+            } else {
+                println!("  {} -> {}", a.slug, a.key);
+            }
+        }
+        if r.new_head != r.old_head {
+            println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
+        }
+    }
+    Ok(())
+}
+
+fn short(sha: &str) -> &str {
+    &sha[..7.min(sha.len())]
+}
+
+fn read_hook_lines(stdin: bool) -> Result<Vec<(String, String, String)>> {
+    if !stdin {
+        let head = rev_parse("HEAD")?;
+        let branch = current_branch()?;
+        return Ok(vec![(head.clone(), head, format!("refs/heads/{branch}"))]);
+    }
+    let mut out = Vec::new();
+    for line in std::io::stdin().lock().lines() {
+        let line = line?;
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() != 3 {
+            anyhow::bail!("linea invalida, se esperaba '<viejo> <nuevo> <ref>': {line}");
+        }
+        out.push((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()));
+    }
+    Ok(out)
 }
 
 fn cmd_check_push(provider_file: PathBuf, stdin: bool) -> Result<()> {
