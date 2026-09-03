@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/worklist",
+    "crates/worklist-cli",
+]
+resolver = "2"
+
+[workspace.package]
+license = "MIT OR Apache-2.0"

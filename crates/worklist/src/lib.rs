@@ -1,0 +1,247 @@
+//! Nucleo de la sincronizacion por ventana: renombrar un item sin clave de
+//! proveedor y reescribir todo lo que lo nombraba, en un solo commit.
+//!
+//! No habla con ningun proveedor. Quien asigna la clave nueva es quien llama
+//! a `resolve_batch`, vía el trait `IdAssigner` — la integracion real con
+//! Jira vive en otro lugar (ver la spec de `worklist push` y el hook).
+
+use anyhow::{anyhow, bail, Context, Result};
+use regex::Regex;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub const TYPES: [&str; 4] = ["task", "user-story", "epic", "sprint"];
+
+/// Encuentra `<slug>.<tipo>.md` en `repo`, probando los tipos conocidos.
+pub fn find_file(repo: &Path, slug: &str) -> Result<(PathBuf, String)> {
+    for t in TYPES {
+        let p = repo.join(format!("{slug}.{t}.md"));
+        if p.exists() {
+            return Ok((p, t.to_string()));
+        }
+    }
+    Err(anyhow!("no existe {slug}.<tipo>.md en {}", repo.display()))
+}
+
+/// Un id de proveedor lleva mayuscula y guion (ACC-101); un slug local no.
+pub fn is_unassigned(slug: &str) -> bool {
+    let re = Regex::new(r"^[A-Z]+-\d+$").unwrap();
+    !re.is_match(slug)
+}
+
+fn boundary(pattern: &str) -> Regex {
+    Regex::new(&format!("{pattern}(?:[^A-Za-z0-9_-]|$)")).unwrap()
+}
+
+/// Reescribe en `text` toda referencia delimitada a `old_slug` (link, backtick,
+/// campo de frontmatter) por `new_id`. Nunca toca una subcadena suelta: un
+/// `old_slug` seguido de mas caracteres de identificador no matchea.
+pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &str) -> (String, bool) {
+    let mut changed = false;
+    let mut out = text.to_string();
+
+    // 1. destinos de link: ](old_slug.tipo.md  [...anchor u otro cierre]
+    let link_pat = format!(r"\]\({}\.{}\.md", regex::escape(old_slug), regex::escape(old_type));
+    let link_re = boundary(&link_pat);
+    out = replace_boundary(&link_re, &out, &mut changed, &format!("]({new_id}.{old_type}.md"));
+
+    // 2. frontmatter: parent: <slug>  y  relation.<tipo>: [...] o valor suelto
+    if let Some(fm_end) = frontmatter_end(&out) {
+        let (fm, rest) = out.split_at(fm_end);
+        let mut fm = fm.to_string();
+
+        let parent_re = Regex::new(&format!(
+            r"parent:\s*{}(?:[^A-Za-z0-9_-]|$)",
+            regex::escape(old_slug)
+        ))
+        .unwrap();
+        if parent_re.is_match(&fm) {
+            fm = parent_re.replace(&fm, format!("parent: {new_id}")).to_string();
+            changed = true;
+        }
+
+        let rel_re = Regex::new(r"(relation\.[a-zA-Z_]+:\s*)(\[[^\]]*\]|[^\n]+)").unwrap();
+        let slug_re = boundary(&regex::escape(old_slug));
+        fm = rel_re
+            .replace_all(&fm, |caps: &regex::Captures| {
+                let prefix = &caps[1];
+                let body = &caps[2];
+                let new_body = replace_boundary(&slug_re, body, &mut changed, new_id);
+                format!("{prefix}{new_body}")
+            })
+            .to_string();
+
+        out = format!("{fm}{rest}");
+    }
+
+    // 3. ids entre backticks en prosa: `old_slug`
+    let backtick_pat = format!("`{}`", regex::escape(old_slug));
+    let backtick_re = boundary(&backtick_pat);
+    out = replace_boundary(&backtick_re, &out, &mut changed, &format!("`{new_id}`"));
+
+    (out, changed)
+}
+
+/// `Regex::replace_all` pero marcando `changed` y sin perder el caracter de
+/// cierre que la lookahead-manual de `boundary` consume como parte del match.
+fn replace_boundary(re: &Regex, text: &str, changed: &mut bool, new_head: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for m in re.find_iter(text) {
+        let matched = m.as_str();
+        // el ultimo char del match es el delimitador (o vacio si es fin de string)
+        let head_len = matched.len() - trailing_delim_len(matched);
+        out.push_str(&text[last..m.start()]);
+        out.push_str(new_head);
+        out.push_str(&matched[head_len..]);
+        last = m.end();
+        *changed = true;
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+fn trailing_delim_len(matched: &str) -> usize {
+    // boundary() agrega (?:[^A-Za-z0-9_-]|$) al final: 0 o 1 byte ascii, o 0 si matcheo $.
+    match matched.chars().last() {
+        Some(c) if !c.is_ascii_alphanumeric() && c != '_' && c != '-' => c.len_utf8(),
+        _ => 0,
+    }
+}
+
+fn frontmatter_end(text: &str) -> Option<usize> {
+    if !text.starts_with("---\n") {
+        return None;
+    }
+    let rest = &text[4..];
+    let idx = rest.find("\n---\n")?;
+    Some(4 + idx + 5)
+}
+
+/// Los ids (`parent` + todo `relation.*`) que el frontmatter de `text` nombra.
+pub fn read_frontmatter_refs(text: &str) -> HashSet<String> {
+    let mut refs = HashSet::new();
+    let Some(end) = frontmatter_end(text) else { return refs };
+    let fm = &text[..end];
+
+    let parent_re = Regex::new(r"(?m)^parent:\s*(\S+)").unwrap();
+    if let Some(c) = parent_re.captures(fm) {
+        refs.insert(c[1].to_string());
+    }
+    let rel_re = Regex::new(r"relation\.[a-zA-Z_]+:\s*(\[[^\]]*\]|\S+)").unwrap();
+    let id_re = Regex::new(r"[A-Za-z0-9_-]+").unwrap();
+    for c in rel_re.captures_iter(fm) {
+        for id in id_re.find_iter(&c[1]) {
+            refs.insert(id.as_str().to_string());
+        }
+    }
+    refs
+}
+
+/// Orden topologico de `slugs` (todos sin clave) segun sus referencias a otros
+/// slugs del mismo lote. Error si hay un ciclo.
+pub fn topo_order(repo: &Path, slugs: &[String]) -> Result<Vec<String>> {
+    let slug_set: HashSet<&str> = slugs.iter().map(|s| s.as_str()).collect();
+    let mut deps: HashMap<String, HashSet<String>> = HashMap::new();
+    for slug in slugs {
+        let (path, _) = find_file(repo, slug)?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("leyendo {}", path.display()))?;
+        let refs = read_frontmatter_refs(&text);
+        let filtered: HashSet<String> = refs
+            .into_iter()
+            .filter(|r| slug_set.contains(r.as_str()))
+            .collect();
+        deps.insert(slug.clone(), filtered);
+    }
+
+    let mut order = Vec::new();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+
+    fn visit(
+        s: &str,
+        deps: &HashMap<String, HashSet<String>>,
+        visiting: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+        order: &mut Vec<String>,
+    ) -> Result<()> {
+        if visited.contains(s) {
+            return Ok(());
+        }
+        if visiting.contains(s) {
+            bail!("ciclo detectado en {s}");
+        }
+        visiting.insert(s.to_string());
+        for dep in &deps[s] {
+            visit(dep, deps, visiting, visited, order)?;
+        }
+        visiting.remove(s);
+        visited.insert(s.to_string());
+        order.push(s.to_string());
+        Ok(())
+    }
+
+    for s in slugs {
+        visit(s, &deps, &mut visiting, &mut visited, &mut order)?;
+    }
+    Ok(order)
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .status()
+        .with_context(|| format!("corriendo git {:?}", args))?;
+    if !status.success() {
+        bail!("git {:?} fallo con {status}", args);
+    }
+    Ok(())
+}
+
+/// Renombra un item y reescribe sus referencias en todo el repo, en un commit.
+/// Devuelve los nombres de archivo tocados (sin contar el propio renombrado).
+pub fn rename_one(repo: &Path, old_slug: &str, new_id: &str) -> Result<Vec<String>> {
+    let (src, item_type) = find_file(repo, old_slug)?;
+    let dst_name = format!("{new_id}.{item_type}.md");
+
+    let mut touched = Vec::new();
+    for entry in std::fs::read_dir(repo)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        let (new_text, changed) = rewrite_references(&text, old_slug, &item_type, new_id);
+        if changed {
+            std::fs::write(&path, new_text)?;
+            touched.push(path.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+
+    git(repo, &["mv", src.file_name().unwrap().to_str().unwrap(), &dst_name])?;
+    git(repo, &["add", "-A"])?;
+    let msg = if touched.is_empty() {
+        format!("rename {old_slug} -> {new_id}")
+    } else {
+        format!("rename {old_slug} -> {new_id} ({} refs)", touched.len())
+    };
+    git(repo, &["commit", "-q", "-m", &msg])?;
+    Ok(touched)
+}
+
+/// Renombra un lote de pedidos en orden topologico. Si hay un ciclo, no
+/// escribe nada: `topo_order` falla antes de tocar el repo.
+pub fn resolve_batch(repo: &Path, slug_to_id: &HashMap<String, String>) -> Result<()> {
+    let slugs: Vec<String> = slug_to_id.keys().cloned().collect();
+    let order = topo_order(repo, &slugs)?;
+    for slug in order {
+        let new_id = &slug_to_id[&slug];
+        rename_one(repo, &slug, new_id)?;
+    }
+    Ok(())
+}
