@@ -24,6 +24,11 @@ enum Cmd {
         #[arg(long)]
         stdin: bool,
     },
+    /// Recorta una ventana: la rama con los items de un sprint y nada mas.
+    Window {
+        #[command(subcommand)]
+        sub: WindowCmd,
+    },
     /// Manipula el proveedor de prueba directamente, sin pasar por git.
     Provider {
         #[command(subcommand)]
@@ -59,6 +64,17 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum WindowCmd {
+    Open {
+        sprint_id: String,
+        #[arg(long, default_value = "insecure/all")]
+        from: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProviderCmd {
     SetStatus {
         #[arg(long)]
@@ -78,6 +94,18 @@ fn main() -> Result<()> {
             match old {
                 Some(old) => println!("{clave}: {old} -> {status}"),
                 None => println!("{clave}: (nuevo) -> {status}"),
+            }
+            Ok(())
+        }
+        Cmd::Window { sub: WindowCmd::Open { sprint_id, from, dry_run } } => {
+            let repo = std::env::current_dir()?;
+            let (files, head) = worklist::window::open(&repo, &sprint_id, &from, dry_run)?;
+            println!("secure/sprint/{sprint_id}: {} archivo(s)", files.len());
+            for f in &files {
+                println!("  {f}");
+            }
+            if !dry_run {
+                println!("recortado desde {from} -> {}", short(&head));
             }
             Ok(())
         }

@@ -12,6 +12,7 @@ pub mod body;
 pub mod check_push;
 pub mod creator;
 pub mod provider;
+pub mod window;
 
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
