@@ -119,8 +119,10 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let creator = AcliCreator::new(project);
-            let key = creator.create_or_find(&titulo, &r#type, &description)?;
-            println!("{key}");
+            // Sin `--parent`: este comando resuelve un item suelto, y la
+            // jerarquia la calcula `assign-keys` sobre la ventana entera.
+            let outcome = creator.create_or_find(&titulo, &r#type, &description, None)?;
+            println!("{}", outcome.key());
             Ok(())
         }
     }
@@ -143,14 +145,30 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
         println!("{}: {} pedido(s)", r.refname, r.assigned.len());
         println!("  orden: {}", r.order.join(", "));
         for a in &r.assigned {
-            if a.rewritten > 0 {
-                println!("  {} -> {}  ({} refs reescritas)", a.slug, a.key, a.rewritten);
-            } else {
-                println!("  {} -> {}", a.slug, a.key);
+            let refs = match a.rewritten {
+                0 => String::new(),
+                n => format!("  ({n} refs reescritas)"),
+            };
+            let padre = match &a.parent {
+                Some(p) => format!("  [parent {p}]"),
+                None => String::new(),
+            };
+            println!("  {} -> {}{}{}", a.slug, a.key, refs, padre);
+            // El padre solo se puede poner al crear: sobre un issue que ya
+            // existia, la jerarquia pedida no se aplico y hay que decirlo.
+            if a.parent_missed {
+                println!(
+                    "  ! {}: ya existia, asi que NO quedo bajo {} — acli no acepta --parent al editar",
+                    a.key,
+                    a.parent.as_deref().unwrap_or("?")
+                );
             }
         }
         for (blocker, blocked) in &r.linked {
             println!("  vinculo: {blocker} Blocks {blocked}");
+        }
+        for (story, task) in &r.related {
+            println!("  vinculo: {story} Relates {task}");
         }
         if r.new_head != r.old_head {
             println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));

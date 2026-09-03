@@ -10,20 +10,30 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct Assigned {
     pub slug: String,
     pub key: String,
     pub rewritten: usize,
     /// El round-trip cambio el archivo: quedo un commit `normalize:` propio.
     pub normalized: bool,
+    /// La clave de la epica ancestro que se le pidio de `--parent`, si tenia.
+    pub parent: Option<String>,
+    /// Se le pidio un padre y el issue ya existia, asi que **no se aplico**:
+    /// `acli` acepta `--parent` al crear y no al editar.
+    pub parent_missed: bool,
 }
 
+#[derive(Debug)]
 pub struct WindowResult {
     pub refname: String,
     pub order: Vec<String>,
     pub assigned: Vec<Assigned>,
     /// `(bloqueante, bloqueado)` de los vinculos creados en esta corrida.
     pub linked: Vec<(String, String)>,
+    /// `(user story, task)` de los `Relates` creados: el escalon del medio del
+    /// worklist, que Jira no tiene como jerarquia.
+    pub related: Vec<(String, String)>,
     pub old_head: String,
     pub new_head: String,
 }
@@ -100,6 +110,17 @@ pub fn assign_window(
     let result = (|| -> Result<WindowResult> {
         let order = crate::topo_order(&tmp, &slugs)?;
 
+        // La jerarquia se lee una vez, antes de crear nada: el `--parent` de un
+        // item es su epica ancestro, y para saberla hay que tener la cadena
+        // entera. Ver `concepts/sync.md`.
+        let mut parents: HashMap<String, String> = HashMap::new();
+        for slug in &slugs {
+            let (path, _) = crate::find_file(&tmp, slug)?;
+            if let Some(p) = parent_of(&std::fs::read_to_string(&path)?) {
+                parents.insert(slug.clone(), p);
+            }
+        }
+
         // ── Pasada 1: claves y renombres. Nada viaja al proveedor todavia:
         // un cuerpo enviado aca llevaria los nombres previos al renombre de
         // los demas del lote, y quedaria congelado asi.
@@ -110,22 +131,37 @@ pub fn assign_window(
             let text = std::fs::read_to_string(&path)?;
             let title = title_of(&text).unwrap_or_else(|| slug.clone());
 
+            // La epica ya tiene clave: el orden topologico la pone antes.
+            let epic_slug = epic_ancestor(slug, &parents, &types);
+            let parent_key = epic_slug.as_ref().and_then(|e| {
+                assigned
+                    .iter()
+                    .find(|a: &&Assigned| &a.slug == e)
+                    .map(|a| a.key.clone())
+            });
+
             if dry_run {
                 assigned.push(Assigned {
                     slug: slug.clone(),
                     key: "(dry-run)".into(),
                     rewritten: 0,
                     normalized: false,
+                    parent: parent_key,
+                    parent_missed: false,
                 });
                 continue;
             }
-            let key = creator.create_or_find(&title, item_type, &title)?;
+            let outcome =
+                creator.create_or_find(&title, item_type, &title, parent_key.as_deref())?;
+            let key = outcome.key().to_string();
             let touched = crate::rename_one(&tmp, slug, &key)?;
             assigned.push(Assigned {
                 slug: slug.clone(),
                 key,
                 rewritten: touched.len(),
                 normalized: false,
+                parent_missed: outcome.parent_missed(parent_key.as_deref()),
+                parent: parent_key,
             });
         }
 
@@ -146,6 +182,7 @@ pub fn assign_window(
 
         // ── Pasada 3: los vinculos, con las dos puntas ya existiendo.
         let mut linked = Vec::new();
+        let mut related = Vec::new();
         if !dry_run {
             for a in &assigned {
                 let (path, _) = crate::find_file(&tmp, &a.key)?;
@@ -153,6 +190,19 @@ pub fn assign_window(
                 for dep in depends_of(&text) {
                     if creator.link_blocks(&dep, &a.key)? {
                         linked.push((dep, a.key.clone()));
+                    }
+                }
+                // El escalon que Jira no tiene: si el padre directo no es la
+                // epica que ya viajo como `--parent`, va como `Relates`.
+                let direct = parents.get(&a.slug);
+                let is_epic = direct
+                    .map(|d| types.get(d).map(|t| t == "epic").unwrap_or(false))
+                    .unwrap_or(false);
+                if let (Some(d), false) = (direct, is_epic) {
+                    if let Some(dk) = assigned.iter().find(|x| &x.slug == d).map(|x| &x.key) {
+                        if creator.link_relates(dk, &a.key)? {
+                            related.push((dk.clone(), a.key.clone()));
+                        }
                     }
                 }
             }
@@ -164,6 +214,7 @@ pub fn assign_window(
             order,
             assigned,
             linked,
+            related,
             old_head: new_rev.to_string(),
             new_head,
         })
@@ -185,6 +236,38 @@ fn tempdir_path(repo: &Path, refname: &str) -> std::path::PathBuf {
 }
 
 /// Los ids que `relation.depends` declara en el frontmatter.
+/// El `parent` del frontmatter, que es un slug del worklist.
+fn parent_of(text: &str) -> Option<String> {
+    let end = text.find("\n---\n")?;
+    let re = regex::Regex::new(r"(?m)^parent:\s*(\S+)$").unwrap();
+    re.captures(&text[..end]).map(|c| c[1].to_string())
+}
+
+/// La epica de la que cuelga un item, subiendo la cadena `parent` hasta el
+/// primer `epic`. Es lo que Jira acepta de `--parent`: `Historia` y `Tarea`
+/// estan en el mismo nivel, asi que el padre directo no siempre sirve.
+///
+/// Se corta si la cadena sale de la ventana o si da una vuelta: un ciclo en
+/// los `parent` es un error del worklist, y colgarse no lo arregla.
+fn epic_ancestor(
+    slug: &str,
+    parents: &HashMap<String, String>,
+    types: &HashMap<String, String>,
+) -> Option<String> {
+    let mut seen = vec![slug.to_string()];
+    let mut at = parents.get(slug)?.clone();
+    loop {
+        if types.get(&at).map(|t| t == "epic").unwrap_or(false) {
+            return Some(at);
+        }
+        if seen.contains(&at) {
+            return None;
+        }
+        seen.push(at.clone());
+        at = parents.get(&at)?.clone();
+    }
+}
+
 fn depends_of(text: &str) -> Vec<String> {
     let Some(end) = text.find("\n---\n") else { return Vec::new() };
     let fm = &text[..end];
