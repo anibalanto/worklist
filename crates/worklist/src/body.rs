@@ -35,13 +35,46 @@ pub fn adf_to_body(adf: &str) -> Result<String> {
     Ok(out.text)
 }
 
+/// `<clave>.<tipo>.md` -> `<base>/browse/<clave>`, en los destinos de link.
+///
+/// En el repo un item referencia a otro por su archivo; en el proveedor eso
+/// no significa nada. **No se convierte en un vinculo del proveedor**: una
+/// cita en prosa no es una dependencia declarada — para eso esta `relation.*`.
+pub fn links_out(body: &str, base: &str) -> String {
+    let types = crate::TYPES.join("|");
+    let re = regex::Regex::new(&format!(r"\]\(([A-Z]+-\d+)\.(?:{types})\.md\)")).unwrap();
+    re.replace_all(body, |c: &regex::Captures| {
+        format!("]({}/browse/{})", base.trim_end_matches('/'), &c[1])
+    })
+    .to_string()
+}
+
+/// La vuelta: `<base>/browse/<clave>` -> `<clave>.<tipo>.md`.
+///
+/// El tipo no esta en la URL: se resuelve mirando que `<clave>.*.md` existe en
+/// la ventana. **Si no esta —una referencia a otra ventana— la URL se queda
+/// como URL**, que es la forma correcta para algo que no vive aca.
+pub fn links_in(body: &str, base: &str, repo: &std::path::Path) -> String {
+    let base = regex::escape(base.trim_end_matches('/'));
+    let re = regex::Regex::new(&format!(r"\]\({base}/browse/([A-Z]+-\d+)\)")).unwrap();
+    re.replace_all(body, |c: &regex::Captures| {
+        let key = &c[1];
+        match crate::find_file(repo, key) {
+            Ok((_, item_type)) => format!("]({key}.{item_type}.md)"),
+            Err(_) => c[0].to_string(),
+        }
+    })
+    .to_string()
+}
+
 /// Toma el archivo entero, devuelve `(adf_para_el_proveedor, archivo_a_guardar)`.
 ///
 /// El frontmatter vuelve intacto, byte a byte: se separa antes de convertir y
-/// se vuelve a pegar despues.
-pub fn round_trip(text: &str) -> Result<(String, String)> {
+/// se vuelve a pegar despues. `base` y `repo` traducen los links a otros items
+/// en el borde: salen como URL del proveedor, vuelven como nombre de archivo.
+pub fn round_trip(text: &str, base: &str, repo: &std::path::Path) -> Result<(String, String)> {
     let (frontmatter, body) = split_frontmatter(text);
-    let adf = body_to_adf(body)?;
-    let back = adf_to_body(&adf)?;
+    let adf = body_to_adf(&links_out(body, base))?;
+    let back = links_in(&adf_to_body(&adf)?, base, repo);
     Ok((adf, format!("{frontmatter}{back}")))
 }

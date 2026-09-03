@@ -34,6 +34,9 @@ enum Cmd {
     AssignKeys {
         #[arg(long)]
         project: String,
+        /// Base del proveedor, para traducir los links a otros items.
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo del hook.
         #[arg(long)]
         stdin: bool,
@@ -78,7 +81,9 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::AssignKeys { project, stdin, dry_run } => cmd_assign_keys(project, stdin, dry_run),
+        Cmd::AssignKeys { project, base, stdin, dry_run } => {
+            cmd_assign_keys(project, base, stdin, dry_run)
+        }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             let description = format!("Fuente: {source}");
             if dry_run {
@@ -93,7 +98,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_assign_keys(project: String, stdin: bool, dry_run: bool) -> Result<()> {
+fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) -> Result<()> {
     let repo = std::env::current_dir()?;
     let creator = AcliCreator::new(project);
 
@@ -102,7 +107,7 @@ fn cmd_assign_keys(project: String, stdin: bool, dry_run: bool) -> Result<()> {
         if !(refname.starts_with("refs/heads/sprint/") || refname == "refs/heads/backlog") {
             continue;
         }
-        let r = worklist::assign::assign_window(&repo, &refname, &new, &creator, dry_run)?;
+        let r = worklist::assign::assign_window(&repo, &refname, &new, &base, &creator, dry_run)?;
         let Some(r) = r else {
             println!("{refname}: sin pedidos");
             continue;
@@ -115,6 +120,9 @@ fn cmd_assign_keys(project: String, stdin: bool, dry_run: bool) -> Result<()> {
             } else {
                 println!("  {} -> {}", a.slug, a.key);
             }
+        }
+        for (blocker, blocked) in &r.linked {
+            println!("  vinculo: {blocker} Blocks {blocked}");
         }
         if r.new_head != r.old_head {
             println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));

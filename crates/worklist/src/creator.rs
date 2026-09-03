@@ -6,6 +6,13 @@ use std::process::Command;
 
 pub trait Creator {
     fn create_or_find(&self, title: &str, item_type: &str, description: &str) -> Result<String>;
+    /// Pisa la descripcion de un item ya creado. Es la pasada 2: el cuerpo no
+    /// puede viajar en la creacion porque ahi los renombres todavia no
+    /// terminaron. Ver `concepts/sync.md`.
+    fn set_description(&self, key: &str, adf: &str) -> Result<()>;
+    /// `blocker` bloquea a `blocked`. Idempotente: si el vinculo ya existe, no
+    /// hace nada.
+    fn link_blocks(&self, blocker: &str, blocked: &str) -> Result<bool>;
 }
 
 /// Escapa un titulo para entrar en un JQL `summary ~ "..."`: backslash y
@@ -109,6 +116,50 @@ impl Creator for AcliCreator {
             return Ok(key);
         }
         self.create(title, jira_type(item_type)?, description)
+    }
+
+    fn set_description(&self, key: &str, adf: &str) -> Result<()> {
+        // Por archivo y no por flag: un ADF de un cuerpo real no entra comodo
+        // en una linea de comando.
+        let tmp = std::env::temp_dir().join(format!("worklist-desc-{key}.json"));
+        std::fs::write(&tmp, adf)?;
+        let out = Command::new("acli")
+            .args(["jira", "workitem", "edit", "--key", key, "--description-file"])
+            .arg(&tmp)
+            .arg("--yes")
+            .output()
+            .context("corriendo acli jira workitem edit")?;
+        let _ = std::fs::remove_file(&tmp);
+        if !out.status.success() {
+            bail!("acli edit fallo: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Ok(())
+    }
+
+    fn link_blocks(&self, blocker: &str, blocked: &str) -> Result<bool> {
+        // Buscar antes de vincular, por el mismo motivo que create_or_find:
+        // si el hook falla despues, el reintento no puede duplicar.
+        let listed = Command::new("acli")
+            .args(["jira", "workitem", "link", "list", "--key", blocked])
+            .output()
+            .context("corriendo acli jira workitem link list")?;
+        if listed.status.success() {
+            let text = String::from_utf8_lossy(&listed.stdout);
+            if text.contains(blocker) {
+                return Ok(false);
+            }
+        }
+        let out = Command::new("acli")
+            .args([
+                "jira", "workitem", "link", "create",
+                "--out", blocker, "--in", blocked, "--type", "Blocks",
+            ])
+            .output()
+            .context("corriendo acli jira workitem link create")?;
+        if !out.status.success() {
+            bail!("acli link create fallo: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Ok(true)
     }
 }
 

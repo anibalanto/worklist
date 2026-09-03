@@ -22,6 +22,8 @@ pub struct WindowResult {
     pub refname: String,
     pub order: Vec<String>,
     pub assigned: Vec<Assigned>,
+    /// `(bloqueante, bloqueado)` de los vinculos creados en esta corrida.
+    pub linked: Vec<(String, String)>,
     pub old_head: String,
     pub new_head: String,
 }
@@ -72,6 +74,7 @@ pub fn assign_window(
     repo: &Path,
     refname: &str,
     new_rev: &str,
+    base: &str,
     creator: &dyn Creator,
     dry_run: bool,
 ) -> Result<Option<WindowResult>> {
@@ -97,6 +100,9 @@ pub fn assign_window(
     let result = (|| -> Result<WindowResult> {
         let order = crate::topo_order(&tmp, &slugs)?;
 
+        // ── Pasada 1: claves y renombres. Nada viaja al proveedor todavia:
+        // un cuerpo enviado aca llevaria los nombres previos al renombre de
+        // los demas del lote, y quedaria congelado asi.
         let mut assigned = Vec::new();
         for slug in &order {
             let item_type = &types[slug];
@@ -113,23 +119,43 @@ pub fn assign_window(
                 });
                 continue;
             }
-            // El cuerpo viaja convertido a ADF, y lo que se guarda es la
-            // vuelta — no el markdown que llego. Ver `concepts/sync.md`.
-            let (adf, canonical) = crate::body::round_trip(&text)?;
-            let normalized = canonical != text;
-            if normalized {
-                std::fs::write(&path, &canonical)?;
-                crate::commit_all(&tmp, &format!("normalize: {slug}"))?;
-            }
-
-            let key = creator.create_or_find(&title, item_type, &adf)?;
+            let key = creator.create_or_find(&title, item_type, &title)?;
             let touched = crate::rename_one(&tmp, slug, &key)?;
             assigned.push(Assigned {
                 slug: slug.clone(),
                 key,
                 rewritten: touched.len(),
-                normalized,
+                normalized: false,
             });
+        }
+
+        // ── Pasada 2: los cuerpos, ya con todos los nombres finales puestos.
+        if !dry_run {
+            for a in assigned.iter_mut() {
+                let (path, _) = crate::find_file(&tmp, &a.key)?;
+                let text = std::fs::read_to_string(&path)?;
+                let (adf, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                if canonical != text {
+                    std::fs::write(&path, &canonical)?;
+                    crate::commit_all(&tmp, &format!("normalize: {}", a.key))?;
+                    a.normalized = true;
+                }
+                creator.set_description(&a.key, &adf)?;
+            }
+        }
+
+        // ── Pasada 3: los vinculos, con las dos puntas ya existiendo.
+        let mut linked = Vec::new();
+        if !dry_run {
+            for a in &assigned {
+                let (path, _) = crate::find_file(&tmp, &a.key)?;
+                let text = std::fs::read_to_string(&path)?;
+                for dep in depends_of(&text) {
+                    if creator.link_blocks(&dep, &a.key)? {
+                        linked.push((dep, a.key.clone()));
+                    }
+                }
+            }
         }
 
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
@@ -137,6 +163,7 @@ pub fn assign_window(
             refname: refname.to_string(),
             order,
             assigned,
+            linked,
             old_head: new_rev.to_string(),
             new_head,
         })
@@ -155,6 +182,17 @@ pub fn assign_window(
 fn tempdir_path(repo: &Path, refname: &str) -> std::path::PathBuf {
     let safe = refname.replace('/', "-");
     repo.join(format!("../.worklist-assign-{safe}"))
+}
+
+/// Los ids que `relation.depends` declara en el frontmatter.
+fn depends_of(text: &str) -> Vec<String> {
+    let Some(end) = text.find("\n---\n") else { return Vec::new() };
+    let fm = &text[..end];
+    let re = regex::Regex::new(r"relation\.depends:\s*(\[[^\]]*\]|\S+)").unwrap();
+    let id = regex::Regex::new(r"[A-Za-z0-9_-]+").unwrap();
+    re.captures(fm)
+        .map(|c| id.find_iter(&c[1]).map(|m| m.as_str().to_string()).collect())
+        .unwrap_or_default()
 }
 
 fn title_of(text: &str) -> Option<String> {
