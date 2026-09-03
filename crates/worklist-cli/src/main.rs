@@ -4,6 +4,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::Command;
 use worklist::check_push::check_one;
+use worklist::creator::{dry_run_plan, AcliCreator, Creator};
 use worklist::provider::FileProvider;
 
 #[derive(Parser)]
@@ -28,6 +29,18 @@ enum Cmd {
         #[command(subcommand)]
         sub: ProviderCmd,
     },
+    /// Busca un issue por titulo antes de crear, para no duplicar en un reintento.
+    CreateOrFind {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        r#type: String,
+        #[arg(long)]
+        source: String,
+        titulo: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -51,6 +64,17 @@ fn main() -> Result<()> {
                 Some(old) => println!("{clave}: {old} -> {status}"),
                 None => println!("{clave}: (nuevo) -> {status}"),
             }
+            Ok(())
+        }
+        Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
+            let description = format!("Fuente: {source}");
+            if dry_run {
+                println!("{}", dry_run_plan(&project, &r#type, &titulo, &description));
+                return Ok(());
+            }
+            let creator = AcliCreator::new(project);
+            let key = creator.create_or_find(&titulo, &r#type, &description)?;
+            println!("{key}");
             Ok(())
         }
     }
