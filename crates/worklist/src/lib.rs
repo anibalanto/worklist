@@ -45,7 +45,9 @@ fn boundary(pattern: &str) -> Regex {
 
 /// Reescribe en `text` toda referencia delimitada a `old_slug` (link, backtick,
 /// campo de frontmatter) por `new_id`. Nunca toca una subcadena suelta: un
-/// `old_slug` seguido de mas caracteres de identificador no matchea.
+/// `old_slug` **rodeado** de caracteres de identificador no matchea, de los dos
+/// lados. Los ids son base-36 y crecen de a uno, asi que uno siempre es sufijo
+/// de otro —`j` de `2j`, `1` de `21`— y el riesgo sube con el contador.
 pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &str) -> (String, bool) {
     let mut changed = false;
     let mut out = text.to_string();
@@ -82,7 +84,7 @@ pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &s
             .replace_all(&fm, |caps: &regex::Captures| {
                 let prefix = &caps[1];
                 let body = &caps[2];
-                let new_body = replace_boundary(&slug_re, body, &mut changed, new_id);
+                let new_body = replace_boundary_word(&slug_re, body, &mut changed, new_id);
                 format!("{prefix}{new_body}")
             })
             .to_string();
@@ -101,9 +103,36 @@ pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &s
 /// `Regex::replace_all` pero marcando `changed` y sin perder el caracter de
 /// cierre que la lookahead-manual de `boundary` consume como parte del match.
 fn replace_boundary(re: &Regex, text: &str, changed: &mut bool, new_head: &str) -> String {
+    replace_boundary_inner(re, text, changed, new_head, false)
+}
+
+/// Como `replace_boundary`, pero exigiendo tambien limite **a la izquierda**.
+///
+/// Es para el patron que empieza con el slug crudo —el de un `relation.<tipo>`—
+/// donde no hay ningun delimitador literal adelante que lo proteja. Sin esto,
+/// renombrar `j` entra adentro de `2j` y escribe `2ACC-77`, que no es el id de
+/// nada. Ver la task `5m`.
+///
+/// El limite **no va en el patron**: metido ahi, el primer match se comeria el
+/// caracter que separa dos referencias adyacentes —`[j,k]`— y la segunda se
+/// quedaria sin limite izquierdo. Se mira el texto de al lado, que no consume.
+fn replace_boundary_word(re: &Regex, text: &str, changed: &mut bool, new_head: &str) -> String {
+    replace_boundary_inner(re, text, changed, new_head, true)
+}
+
+fn replace_boundary_inner(
+    re: &Regex,
+    text: &str,
+    changed: &mut bool,
+    new_head: &str,
+    check_left: bool,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     for m in re.find_iter(text) {
+        if check_left && !left_is_boundary(text, m.start()) {
+            continue;
+        }
         let matched = m.as_str();
         // el ultimo char del match es el delimitador (o vacio si es fin de string)
         let head_len = matched.len() - trailing_delim_len(matched);
@@ -115,6 +144,15 @@ fn replace_boundary(re: &Regex, text: &str, changed: &mut bool, new_head: &str) 
     }
     out.push_str(&text[last..]);
     out
+}
+
+/// El inicio del texto es limite, y tambien cualquier caracter que no sea de
+/// identificador.
+fn left_is_boundary(text: &str, at: usize) -> bool {
+    match text[..at].chars().next_back() {
+        None => true,
+        Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '-',
+    }
 }
 
 fn trailing_delim_len(matched: &str) -> usize {

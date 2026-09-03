@@ -173,3 +173,44 @@ fn renaming_a_parent_in_the_middle_does_not_glue_the_next_line() {
     let (out, _) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
     assert!(out.contains("parent: ACC-14\nstatus: done"), "{out:?}");
 }
+
+/// El defecto de `5m`: el limite de palabra solo miraba a la derecha, asi que
+/// renombrar `j` entraba adentro de `2j` y escribia `2ACC-77`.
+#[test]
+fn renaming_a_slug_does_not_touch_one_that_ends_with_it() {
+    let text = "---\ntitle: k\nrelation.depends: [2j]\n---\n\ncuerpo\n";
+    let (out, changed) = worklist::rewrite_references(text, "j", "user-story", "ACC-77");
+    assert!(!changed, "no habia ninguna referencia a `j`");
+    assert!(out.contains("[2j]"), "quedo intacto: {out:?}");
+}
+
+/// Y el que si es, se reescribe: los dos en el mismo campo, que es el caso
+/// real del sprint 7.
+#[test]
+fn the_right_slug_is_rewritten_with_a_lookalike_next_to_it() {
+    let text = "---\ntitle: k\nrelation.depends: [2j, j]\n---\n\ncuerpo\n";
+    let (out, changed) = worklist::rewrite_references(text, "j", "user-story", "ACC-77");
+    assert!(changed);
+    assert!(out.contains("[2j, ACC-77]"), "{out:?}");
+}
+
+/// Dos referencias adyacentes **sin espacio** comparten el caracter que las
+/// separa. Es lo que romperia meter el limite izquierdo en el patron: el
+/// primer match se lo lleva y el segundo se queda sin.
+#[test]
+fn two_adjacent_references_are_both_rewritten() {
+    let text = "---\ntitle: x\nrelation.depends: [j,j]\n---\n\ncuerpo\n";
+    let (out, _) = worklist::rewrite_references(text, "j", "task", "ACC-77");
+    assert_eq!(out.matches("ACC-77").count(), 2, "las dos: {out:?}");
+    assert!(!out.contains(",j]"), "no quedo ninguna sin reescribir: {out:?}");
+}
+
+/// El slug al principio del campo tambien tiene limite: el `[` que lo abre, y
+/// el inicio del texto cuando el valor va suelto.
+#[test]
+fn a_slug_at_the_start_of_the_field_is_rewritten() {
+    let text = "---\ntitle: x\nrelation.depends: j\n---\n\ncuerpo\n";
+    let (out, changed) = worklist::rewrite_references(text, "j", "task", "ACC-77");
+    assert!(changed);
+    assert!(out.contains("relation.depends: ACC-77"), "{out:?}");
+}
