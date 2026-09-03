@@ -34,6 +34,9 @@ pub struct WindowResult {
     /// `(user story, task)` de los `Relates` creados: el escalon del medio del
     /// worklist, que Jira no tiene como jerarquia.
     pub related: Vec<(String, String)>,
+    /// `(slug, clave)` de las dependencias que apuntan **fuera** de la ventana:
+    /// no hay clave que mandarle al proveedor, asi que el vinculo no se creo.
+    pub untranslated: Vec<(String, String)>,
     pub old_head: String,
     pub new_head: String,
 }
@@ -183,11 +186,22 @@ pub fn assign_window(
         // ── Pasada 3: los vinculos, con las dos puntas ya existiendo.
         let mut linked = Vec::new();
         let mut related = Vec::new();
+        let mut untranslated = Vec::new();
         if !dry_run {
             for a in &assigned {
                 let (path, _) = crate::find_file(&tmp, &a.key)?;
                 let text = std::fs::read_to_string(&path)?;
                 for dep in depends_of(&text) {
+                    // Los `depends` de adentro llegan traducidos: el renombre
+                    // los reescribio. Un slug que sobrevive apunta afuera de la
+                    // ventana, y no hay clave que mandarle al proveedor. Se
+                    // informa y se sigue: exigir que toda dependencia caiga
+                    // adentro seria pedirle al backlog que se ordene por el
+                    // recorte. Ver `concepts/sync.md`.
+                    if crate::is_unassigned(&dep) {
+                        untranslated.push((dep, a.key.clone()));
+                        continue;
+                    }
                     if creator.link_blocks(&dep, &a.key)? {
                         linked.push((dep, a.key.clone()));
                     }
@@ -215,6 +229,7 @@ pub fn assign_window(
             assigned,
             linked,
             related,
+            untranslated,
             old_head: new_rev.to_string(),
             new_head,
         })

@@ -192,3 +192,44 @@ fn a_cycle_in_the_parents_is_reported_before_touching_the_provider() {
         spy.created.borrow()
     );
 }
+
+/// El defecto de `5k`: una dependencia que apunta fuera de la ventana no tiene
+/// clave que mandar. Se informa y **no aborta**: exigir que toda dependencia
+/// caiga adentro seria pedirle al backlog que se ordene por el recorte.
+#[test]
+fn a_dependency_outside_the_window_is_reported_and_does_not_abort() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = &dir.path().join("repo");
+    std::fs::create_dir(r).unwrap();
+    run(r, &["init", "-q", "-b", "insecure/all"]);
+    run(r, &["config", "user.email", "t@t"]);
+    run(r, &["config", "user.name", "t"]);
+    item(r, "1.epic.md", None);
+    // `c` depende de `9`, que es de otra ventana, y de `d`, que esta en esta.
+    std::fs::write(
+        r.join("c.user-story.md"),
+        "---\ntitle: c\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: 1\nrelation.depends: [9, d]\n---\n\ncuerpo\n",
+    )
+    .unwrap();
+    item(r, "d.task.md", Some("1"));
+    run(r, &["add", "-A"]);
+    run(r, &["commit", "-qm", "arbol"]);
+
+    let spy = Spy::default();
+    let res = resolve(r, &spy);
+
+    let key_of = |slug: &str| {
+        res.assigned.iter().find(|a| a.slug == slug).map(|a| a.key.clone()).unwrap()
+    };
+    assert_eq!(
+        res.untranslated,
+        vec![("9".to_string(), key_of("c"))],
+        "la que apunta afuera se informa"
+    );
+    assert_eq!(
+        *spy.blocks.borrow(),
+        vec![(key_of("d"), key_of("c"))],
+        "y la de adentro se crea igual, ya traducida"
+    );
+    assert_eq!(res.assigned.len(), 3, "la ventana se resolvio entera");
+}

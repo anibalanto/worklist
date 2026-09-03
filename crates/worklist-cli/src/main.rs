@@ -170,6 +170,11 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
         for (story, task) in &r.related {
             println!("  vinculo: {story} Relates {task}");
         }
+        for (dep, key) in &r.untranslated {
+            println!(
+                "  ! {key} depende de '{dep}', que no esta en esta ventana — el vinculo no se creo"
+            );
+        }
         if r.new_head != r.old_head {
             println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
         }
