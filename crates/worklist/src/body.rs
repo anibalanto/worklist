@@ -21,11 +21,49 @@ pub fn split_frontmatter(text: &str) -> (&str, &str) {
     }
 }
 
+/// Poda los marks que el schema del proveedor no admite combinados.
+///
+/// **En ADF `code` es exclusivo**: no convive con `strong` ni con `em`. GFM sí
+/// los deja anidar, y un `**`x`**` —negrita sobre un identificador— produce un
+/// nodo con los dos. Jira rechaza el documento **entero** con `INVALID_INPUT`,
+/// no ese nodo: un solo caso deja la descripcion sin subir.
+///
+/// Se quedan los `code` y se van los de enfasis, porque el `code` es el que
+/// lleva informacion —dice que eso es un identificador— y el enfasis se puede
+/// perder sin cambiar lo que la frase significa.
+///
+/// Esto es de la frontera y no del conversor: que marks se pueden combinar es
+/// del vocabulario del proveedor. Ver `concepts/sync.md` seccion "El schema
+/// del proveedor poda".
+pub fn prune_marks(node: &mut serde_json::Value) {
+    const EXCLUDED_BY_CODE: [&str; 2] = ["strong", "em"];
+
+    if let Some(marks) = node.get_mut("marks").and_then(|m| m.as_array_mut()) {
+        let has_code = marks
+            .iter()
+            .any(|m| m.get("type").and_then(|t| t.as_str()) == Some("code"));
+        if has_code {
+            marks.retain(|m| {
+                let t = m.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+                !EXCLUDED_BY_CODE.contains(&t)
+            });
+        }
+    }
+    if let Some(content) = node.get_mut("content").and_then(|c| c.as_array_mut()) {
+        for child in content.iter_mut() {
+            prune_marks(child);
+        }
+    }
+}
+
 /// El cuerpo, como ADF, listo para `--description`.
 pub fn body_to_adf(body: &str) -> Result<String> {
     let out = convert(body, Format::Gfm, Format::Adf, &Options::default())
         .context("convirtiendo el cuerpo a ADF")?;
-    Ok(out.text)
+    let mut doc: serde_json::Value = serde_json::from_str(&out.text)
+        .with_context(|| format!("el ADF que salio del conversor no es JSON: {}", out.text))?;
+    prune_marks(&mut doc);
+    Ok(serde_json::to_string(&doc)?)
 }
 
 /// El ADF de vuelta a markdown — esto es lo que se guarda.

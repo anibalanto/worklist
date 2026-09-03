@@ -73,3 +73,56 @@ fn una_url_a_algo_de_otra_ventana_se_queda_como_url() {
     // ACC-99 no existe en este directorio: no hay tipo que reconstruir.
     assert_eq!(links_in(texto, BASE, dir.path()), texto);
 }
+
+/// El defecto de `5g`: GFM deja anidar negrita y codigo, ADF no. Lo que sale
+/// del conversor tiene los dos marks y Jira rechaza el documento entero.
+#[test]
+fn code_and_strong_together_lose_the_strong() {
+    let adf = worklist::body::body_to_adf("Cargar **`bilinker`** primero.").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&adf).unwrap();
+    let mut seen = false;
+    fn walk(n: &serde_json::Value, seen: &mut bool) {
+        if n.get("type").and_then(|t| t.as_str()) == Some("text") {
+            let marks: Vec<&str> = n
+                .get("marks")
+                .and_then(|m| m.as_array())
+                .map(|a| a.iter().filter_map(|m| m["type"].as_str()).collect())
+                .unwrap_or_default();
+            if marks.contains(&"code") {
+                *seen = true;
+                assert!(!marks.contains(&"strong"), "quedo strong con code: {marks:?}");
+            }
+        }
+        for c in n.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+            walk(c, seen);
+        }
+    }
+    walk(&v, &mut seen);
+    assert!(seen, "el caso no se ejercito: no hubo ningun mark code");
+}
+
+/// La negrita sola no se toca: la poda es sobre la combinacion, no sobre el
+/// enfasis.
+#[test]
+fn strong_on_its_own_survives() {
+    let adf = worklist::body::body_to_adf("Esto es **importante**.").unwrap();
+    assert!(adf.contains("strong"), "{adf}");
+}
+
+/// Y el codigo solo tampoco.
+#[test]
+fn code_on_its_own_survives() {
+    let adf = worklist::body::body_to_adf("Corre `bilinker check`.").unwrap();
+    assert!(adf.contains("code"), "{adf}");
+}
+
+/// La poda entra en cualquier profundidad: el caso que rompio el push real
+/// estaba dentro de un item de lista.
+#[test]
+fn the_pruning_reaches_inside_a_list() {
+    let adf = worklist::body::body_to_adf("- **`bilinker`** — el prerequisito\n- otra cosa").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&adf).unwrap();
+    let s = serde_json::to_string(&v).unwrap();
+    assert!(s.contains("bulletList"), "el caso no se ejercito: {s}");
+    assert!(!s.contains("\"strong\""), "quedo un strong adentro de la lista: {s}");
+}
