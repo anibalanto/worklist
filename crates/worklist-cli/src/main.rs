@@ -33,6 +33,7 @@ enum Cmd {
     CreateOrFind {
         #[arg(long)]
         project: String,
+        /// task, user-story o epic — el vocabulario del worklist, no el de Jira.
         #[arg(long)]
         r#type: String,
         #[arg(long)]
@@ -69,7 +70,7 @@ fn main() -> Result<()> {
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             let description = format!("Fuente: {source}");
             if dry_run {
-                println!("{}", dry_run_plan(&project, &r#type, &titulo, &description));
+                println!("{}", dry_run_plan(&project, &r#type, &titulo, &description)?);
                 return Ok(());
             }
             let creator = AcliCreator::new(project);

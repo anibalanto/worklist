@@ -26,6 +26,19 @@ pub fn search_text(title: &str) -> String {
     escape_jql(&title.replace(['[', ']'], " "))
 }
 
+/// El tipo de un item es del vocabulario del worklist — `task`, `user-story`,
+/// `epic` — y quien habla acli lo traduce al de Jira, que es por proyecto.
+/// Confirmado contra `ACC`: sus tipos estan localizados, y un `Task` en
+/// ingles no existe ahi.
+pub fn jira_type(worklist_type: &str) -> Result<&'static str> {
+    match worklist_type {
+        "task" => Ok("Tarea"),
+        "user-story" => Ok("Historia"),
+        "epic" => Ok("Epic"),
+        other => bail!("tipo de item desconocido: {other} (se esperaba task, user-story o epic)"),
+    }
+}
+
 pub struct AcliCreator {
     project: String,
 }
@@ -95,19 +108,20 @@ impl Creator for AcliCreator {
         if let Some(key) = self.search(title)? {
             return Ok(key);
         }
-        self.create(title, item_type, description)
+        self.create(title, jira_type(item_type)?, description)
     }
 }
 
 /// Lo que `--dry-run` imprime, sin llamar a `acli`. El escapado acá es sólo
 /// para que la línea se lea como el comando real —`Command` nunca pasa por
 /// un shell—, pero mostrar comillas sin escapar rompería la lectura igual.
-pub fn dry_run_plan(project: &str, item_type: &str, title: &str, description: &str) -> String {
+pub fn dry_run_plan(project: &str, item_type: &str, title: &str, description: &str) -> Result<String> {
     let display = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!(
-        "would search: project = {project} AND summary ~ \"{}\"\nwould create: --project {project} --type {item_type} --summary \"{}\" --description \"{}\"",
+    Ok(format!(
+        "would search: project = {project} AND summary ~ \"{}\"\nwould create: --project {project} --type {} --summary \"{}\" --description \"{}\"",
         search_text(title),
+        jira_type(item_type)?,
         display(title),
         display(description),
-    )
+    ))
 }
