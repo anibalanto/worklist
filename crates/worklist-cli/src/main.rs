@@ -102,10 +102,7 @@ fn cmd_assign_keys(project: String, stdin: bool, dry_run: bool) -> Result<()> {
         if !(refname.starts_with("refs/heads/sprint/") || refname == "refs/heads/backlog") {
             continue;
         }
-        let source = |slug: &str| format!("Fuente: {slug} en el worklist");
-        let r = worklist::assign::assign_window(
-            &repo, &refname, &new, &source, &creator, dry_run,
-        )?;
+        let r = worklist::assign::assign_window(&repo, &refname, &new, &creator, dry_run)?;
         let Some(r) = r else {
             println!("{refname}: sin pedidos");
             continue;

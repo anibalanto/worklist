@@ -8,6 +8,7 @@
 //! implementacion del mismo trait.
 
 pub mod assign;
+pub mod body;
 pub mod check_push;
 pub mod creator;
 pub mod provider;
@@ -228,6 +229,13 @@ fn git(repo: &Path, args: &[&str]) -> Result<()> {
         bail!("git {:?} fallo con {status}", args);
     }
     Ok(())
+}
+
+/// Commitea lo que haya en el arbol, con el mensaje dado. El servidor deja
+/// su trabajo como un commit propio: nunca reescribe el del cliente.
+pub fn commit_all(repo: &Path, msg: &str) -> Result<()> {
+    git(repo, &["add", "-A"])?;
+    git(repo, &["commit", "-q", "-m", msg])
 }
 
 /// Renombra un item y reescribe sus referencias en todo el repo, en un commit.

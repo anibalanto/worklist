@@ -14,6 +14,8 @@ pub struct Assigned {
     pub slug: String,
     pub key: String,
     pub rewritten: usize,
+    /// El round-trip cambio el archivo: quedo un commit `normalize:` propio.
+    pub normalized: bool,
 }
 
 pub struct WindowResult {
@@ -70,7 +72,6 @@ pub fn assign_window(
     repo: &Path,
     refname: &str,
     new_rev: &str,
-    project_source: &dyn Fn(&str) -> String,
     creator: &dyn Creator,
     dry_run: bool,
 ) -> Result<Option<WindowResult>> {
@@ -102,15 +103,33 @@ pub fn assign_window(
             let (path, _) = crate::find_file(&tmp, slug)?;
             let text = std::fs::read_to_string(&path)?;
             let title = title_of(&text).unwrap_or_else(|| slug.clone());
-            let source = project_source(slug);
 
             if dry_run {
-                assigned.push(Assigned { slug: slug.clone(), key: "(dry-run)".into(), rewritten: 0 });
+                assigned.push(Assigned {
+                    slug: slug.clone(),
+                    key: "(dry-run)".into(),
+                    rewritten: 0,
+                    normalized: false,
+                });
                 continue;
             }
-            let key = creator.create_or_find(&title, item_type, &source)?;
+            // El cuerpo viaja convertido a ADF, y lo que se guarda es la
+            // vuelta — no el markdown que llego. Ver `concepts/sync.md`.
+            let (adf, canonical) = crate::body::round_trip(&text)?;
+            let normalized = canonical != text;
+            if normalized {
+                std::fs::write(&path, &canonical)?;
+                crate::commit_all(&tmp, &format!("normalize: {slug}"))?;
+            }
+
+            let key = creator.create_or_find(&title, item_type, &adf)?;
             let touched = crate::rename_one(&tmp, slug, &key)?;
-            assigned.push(Assigned { slug: slug.clone(), key, rewritten: touched.len() });
+            assigned.push(Assigned {
+                slug: slug.clone(),
+                key,
+                rewritten: touched.len(),
+                normalized,
+            });
         }
 
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
