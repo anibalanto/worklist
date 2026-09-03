@@ -16,6 +16,16 @@ pub fn escape_jql(title: &str) -> String {
     title.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// `summary ~` no compara texto literal: es full-text search, y `[`/`]`
+/// rompen su parser aunque vayan entre comillas — JQL no tiene forma de
+/// escaparlos (`\[` es una secuencia ilegal). Confirmado contra Jira real:
+/// "[prueba] algo" falla, "prueba algo" no. Se neutralizan con un espacio
+/// antes de escapar comillas — el texto de busqueda deja de ser exacto,
+/// nunca el titulo real que `--summary` usa en la creacion.
+pub fn search_text(title: &str) -> String {
+    escape_jql(&title.replace(['[', ']'], " "))
+}
+
 pub struct AcliCreator {
     project: String,
 }
@@ -29,7 +39,7 @@ impl AcliCreator {
         format!(
             "project = {} AND summary ~ \"{}\"",
             self.project,
-            escape_jql(title)
+            search_text(title)
         )
     }
 
@@ -96,7 +106,7 @@ pub fn dry_run_plan(project: &str, item_type: &str, title: &str, description: &s
     let display = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         "would search: project = {project} AND summary ~ \"{}\"\nwould create: --project {project} --type {item_type} --summary \"{}\" --description \"{}\"",
-        escape_jql(title),
+        search_text(title),
         display(title),
         display(description),
     )

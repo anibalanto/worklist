@@ -1,0 +1,19 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+    accepted:
+    - agree:
+      - test
+      link: capture 658523d7ad74f918d57cb514b6ec5dc6
+      hash: a63220add34d0cd52871223ca06b880028b41094ddb74722049e5f21d8a62c4d
+  1:
+    link: capture 7a0bbb2f16941a52fb7891e24bfdeaaa
+    accepted:
+    - agree:
+      - test
+      link: capture 7a0bbb2f16941a52fb7891e24bfdeaaa
+      hash: ed55ba635228a5ee33c78c05136e489a506f0c5ee9515be04cef86281d59f439
+      hash_ast: ca181f378d3f64eea526ebbe6e2d5e8f8cf195b80f283b176b150a0dc093e623
+      n: declined
+    name: escape_jql

@@ -1,0 +1,4 @@
+file: crates/worklist/src/creator.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "escape_jql")) @target
