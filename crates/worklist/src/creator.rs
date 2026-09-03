@@ -4,8 +4,46 @@
 use anyhow::{bail, Context, Result};
 use std::process::Command;
 
+/// Como se obtuvo la clave. La distincion existe porque `acli` acepta
+/// `--parent` al crear y no al editar: sobre un issue que ya existia, la
+/// jerarquia pedida no se aplico.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Assignment {
+    Created(String),
+    Found(String),
+}
+
+impl Assignment {
+    pub fn key(&self) -> &str {
+        match self {
+            Assignment::Created(k) | Assignment::Found(k) => k,
+        }
+    }
+    /// El padre pedido no se aplico: el issue ya existia.
+    pub fn parent_missed(&self, parent: Option<&str>) -> bool {
+        matches!(self, Assignment::Found(_)) && parent.is_some()
+    }
+}
+
 pub trait Creator {
-    fn create_or_find(&self, title: &str, item_type: &str, description: &str) -> Result<String>;
+    /// La clave del item, creandolo si no existe. `parent` es la clave de su
+    /// **epica ancestro**, no la de su padre directo: Jira no admite `parent`
+    /// entre tipos del mismo nivel, y el escalon del medio del worklist viaja
+    /// como link. Ver `concepts/sync.md` seccion "La jerarquia entra hasta
+    /// donde el proveedor la tiene".
+    ///
+    /// `Found` en vez de `Created` es informacion, no un detalle: el padre solo
+    /// se puede poner al crear, asi que un item que se encontro no lleva la
+    /// jerarquia que se le pidio y quien llama tiene que poder decirlo.
+    fn create_or_find(
+        &self,
+        title: &str,
+        item_type: &str,
+        description: &str,
+        parent: Option<&str>,
+    ) -> Result<Assignment>;
+    /// `a` se relaciona con `b`. Idempotente, como `link_blocks`.
+    fn link_relates(&self, a: &str, b: &str) -> Result<bool>;
     /// Pisa la descripcion de un item ya creado. Es la pasada 2: el cuerpo no
     /// puede viajar en la creacion porque ahi los renombres todavia no
     /// terminaron. Ver `concepts/sync.md`.
@@ -46,6 +84,76 @@ pub fn jira_type(worklist_type: &str) -> Result<&'static str> {
     }
 }
 
+/// Corre `acli --json` y devuelve su salida parseada.
+///
+/// **`acli` sale con 0 cuando la operacion falla.** Escribe una linea de
+/// fracaso en `stdout` y nada mas, asi que mirar el codigo de retorno no
+/// alcanza — y buscar ese texto tampoco, porque es de una herramienta ajena y
+/// esta en el idioma de quien la corre. El resultado se lee de la salida
+/// estructurada. Ver `concepts/sync.md` seccion "El exito se lee de la salida".
+fn acli_json(args: &[&str], what: &str) -> Result<serde_json::Value> {
+    let out = Command::new("acli")
+        .args(args)
+        .output()
+        .with_context(|| format!("corriendo acli {what}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        bail!("acli {what} fallo (exit {:?}): {stderr}{stdout}", out.status.code());
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .with_context(|| format!("acli {what} no devolvio JSON: {stdout}{stderr}"))?;
+    check_batch(&parsed, what)?;
+    Ok(parsed)
+}
+
+/// Las operaciones de lote de `acli` —`edit` entre ellas— responden con un
+/// `results` donde cada entrada lleva su propio `status`. Donde esa forma
+/// esta, el estado de cada item es la unica verdad sobre si se hizo. Donde no
+/// esta —`create` devuelve la clave sola— no hay nada que chequear aca.
+pub fn check_batch(v: &serde_json::Value, what: &str) -> Result<()> {
+    let Some(results) = v.get("results").and_then(|r| r.as_array()) else {
+        return Ok(());
+    };
+    let failed: Vec<String> = results
+        .iter()
+        .filter(|r| r.get("status").and_then(|s| s.as_str()) != Some("SUCCESS"))
+        .map(|r| {
+            let id = r.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+            let msg = r.get("message").and_then(|m| m.as_str()).unwrap_or("sin mensaje");
+            format!("{id}: {msg}")
+        })
+        .collect();
+    if !failed.is_empty() {
+        bail!("acli {what} rechazado por el proveedor — {}", failed.join("; "));
+    }
+    Ok(())
+}
+
+/// Los links de `key`, como `(tipo, la otra punta)`.
+///
+/// `link list --json` solo trae la punta de afuera, y viene nula cuando el
+/// consultado **es** esa punta: desde ahi no se sabe quien es la otra. Por eso
+/// se consulta siempre el lado de adentro, que es el que ve al bloqueador.
+fn links_of(key: &str) -> Result<Vec<(String, String)>> {
+    let v = acli_json(
+        &["jira", "workitem", "link", "list", "--key", key, "--json"],
+        "link list",
+    )?;
+    Ok(v.get("issueLinks")
+        .and_then(|l| l.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|l| {
+                    let t = l.get("typeName")?.as_str()?.to_string();
+                    let o = l.get("outwardIssueKey")?.as_str()?.to_string();
+                    Some((t, o))
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 pub struct AcliCreator {
     project: String,
 }
@@ -65,16 +173,10 @@ impl AcliCreator {
 
     fn search(&self, title: &str) -> Result<Option<String>> {
         let jql = self.jql(title);
-        let out = Command::new("acli")
-            .args(["jira", "workitem", "search", "--jql", &jql, "--json"])
-            .output()
-            .context("corriendo acli jira workitem search")?;
-        if !out.status.success() {
-            bail!("acli search fallo: {}", String::from_utf8_lossy(&out.stderr));
-        }
-        let text = String::from_utf8(out.stdout)?;
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .with_context(|| format!("parseando salida de acli search: {text}"))?;
+        let parsed = acli_json(
+            &["jira", "workitem", "search", "--jql", &jql, "--json"],
+            "search",
+        )?;
         let key = parsed
             .as_array()
             .and_then(|arr| arr.first())
@@ -84,38 +186,91 @@ impl AcliCreator {
         Ok(key)
     }
 
-    fn create(&self, title: &str, item_type: &str, description: &str) -> Result<String> {
-        let out = Command::new("acli")
-            .args([
-                "jira", "workitem", "create",
-                "--project", &self.project,
-                "--type", item_type,
-                "--summary", title,
-                "--description", description,
-                "--json",
-            ])
-            .output()
-            .context("corriendo acli jira workitem create")?;
-        if !out.status.success() {
-            bail!("acli create fallo: {}", String::from_utf8_lossy(&out.stderr));
+    fn create(
+        &self,
+        title: &str,
+        item_type: &str,
+        description: &str,
+        parent: Option<&str>,
+    ) -> Result<String> {
+        let mut args = vec![
+            "jira", "workitem", "create",
+            "--project", &self.project,
+            "--type", item_type,
+            "--summary", title,
+            "--description", description,
+            "--json",
+        ];
+        if let Some(p) = parent {
+            args.push("--parent");
+            args.push(p);
         }
-        let text = String::from_utf8(out.stdout)?;
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .with_context(|| format!("parseando salida de acli create: {text}"))?;
+        let parsed = acli_json(&args, "create")?;
         parsed
             .get("key")
             .and_then(|k| k.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("acli create no devolvio 'key': {text}"))
+            .ok_or_else(|| anyhow::anyhow!("acli create no devolvio 'key': {parsed}"))
+    }
+}
+
+impl AcliCreator {
+    /// Vincula dos issues y **verifica el efecto**.
+    ///
+    /// `link create` no acepta `--json`, asi que su resultado no se puede leer
+    /// de la salida: se lee del proveedor, listando los links de vuelta. Es una
+    /// llamada mas y es la unica forma de no confundir "lo intente" con "esta".
+    ///
+    /// Buscar antes de vincular es por el mismo motivo que `create_or_find`: si
+    /// el hook falla despues, el reintento no puede duplicar. La busqueda es
+    /// por `(tipo, punta)` y no por texto — un `contains` sobre la salida
+    /// cruda daba por existente cualquier link que mencionara la clave.
+    fn link(&self, blocker: &str, blocked: &str, link_type: &str) -> Result<bool> {
+        let already = |ls: &[(String, String)]| {
+            ls.iter().any(|(t, o)| t == link_type && o == blocker)
+        };
+        if already(&links_of(blocked)?) {
+            return Ok(false);
+        }
+        let out = Command::new("acli")
+            .args([
+                "jira", "workitem", "link", "create",
+                "--out", blocker, "--in", blocked, "--type", link_type,
+                "--yes",
+            ])
+            .output()
+            .context("corriendo acli jira workitem link create")?;
+        if !out.status.success() {
+            bail!("acli link create fallo: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        if !already(&links_of(blocked)?) {
+            bail!(
+                "el link {link_type} {blocker} -> {blocked} no quedo: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(true)
     }
 }
 
 impl Creator for AcliCreator {
-    fn create_or_find(&self, title: &str, item_type: &str, description: &str) -> Result<String> {
+    fn create_or_find(
+        &self,
+        title: &str,
+        item_type: &str,
+        description: &str,
+        parent: Option<&str>,
+    ) -> Result<Assignment> {
         if let Some(key) = self.search(title)? {
-            return Ok(key);
+            return Ok(Assignment::Found(key));
         }
-        self.create(title, jira_type(item_type)?, description)
+        self.create(title, jira_type(item_type)?, description, parent)
+            .map(Assignment::Created)
+    }
+
+    fn link_relates(&self, a: &str, b: &str) -> Result<bool> {
+        self.link(a, b, "Relates")
     }
 
     fn set_description(&self, key: &str, adf: &str) -> Result<()> {
@@ -123,43 +278,20 @@ impl Creator for AcliCreator {
         // en una linea de comando.
         let tmp = std::env::temp_dir().join(format!("worklist-desc-{key}.json"));
         std::fs::write(&tmp, adf)?;
-        let out = Command::new("acli")
-            .args(["jira", "workitem", "edit", "--key", key, "--description-file"])
-            .arg(&tmp)
-            .arg("--yes")
-            .output()
-            .context("corriendo acli jira workitem edit")?;
+        let res = acli_json(
+            &[
+                "jira", "workitem", "edit", "--key", key,
+                "--description-file", tmp.to_str().unwrap_or_default(),
+                "--yes", "--json",
+            ],
+            "edit --description-file",
+        );
         let _ = std::fs::remove_file(&tmp);
-        if !out.status.success() {
-            bail!("acli edit fallo: {}", String::from_utf8_lossy(&out.stderr));
-        }
-        Ok(())
+        res.map(|_| ())
     }
 
     fn link_blocks(&self, blocker: &str, blocked: &str) -> Result<bool> {
-        // Buscar antes de vincular, por el mismo motivo que create_or_find:
-        // si el hook falla despues, el reintento no puede duplicar.
-        let listed = Command::new("acli")
-            .args(["jira", "workitem", "link", "list", "--key", blocked])
-            .output()
-            .context("corriendo acli jira workitem link list")?;
-        if listed.status.success() {
-            let text = String::from_utf8_lossy(&listed.stdout);
-            if text.contains(blocker) {
-                return Ok(false);
-            }
-        }
-        let out = Command::new("acli")
-            .args([
-                "jira", "workitem", "link", "create",
-                "--out", blocker, "--in", blocked, "--type", "Blocks",
-            ])
-            .output()
-            .context("corriendo acli jira workitem link create")?;
-        if !out.status.success() {
-            bail!("acli link create fallo: {}", String::from_utf8_lossy(&out.stderr));
-        }
-        Ok(true)
+        self.link(blocker, blocked, "Blocks")
     }
 }
 
