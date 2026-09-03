@@ -60,13 +60,19 @@ pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &s
         let (fm, rest) = out.split_at(fm_end);
         let mut fm = fm.to_string();
 
+        // El delimitador va en un grupo y **se restituye**: sin eso el `\n` se
+        // pierde, y cuando `parent:` es la ultima linea del frontmatter el
+        // cierre queda pegado —`ACC-14---`— y el bloque deja de separarse.
+        // Todo el archivo pasa a ser cuerpo. Ver la task `5i`.
         let parent_re = Regex::new(&format!(
-            r"parent:\s*{}(?:[^A-Za-z0-9_-]|$)",
+            r"parent:\s*{}([^A-Za-z0-9_-]|$)",
             regex::escape(old_slug)
         ))
         .unwrap();
         if parent_re.is_match(&fm) {
-            fm = parent_re.replace(&fm, format!("parent: {new_id}")).to_string();
+            fm = parent_re
+                .replace(&fm, format!("parent: {new_id}${{1}}"))
+                .to_string();
             changed = true;
         }
 

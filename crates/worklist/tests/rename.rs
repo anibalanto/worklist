@@ -140,3 +140,36 @@ fn un_ciclo_se_rechaza_sin_escribir_nada() {
     assert!(repo.join("slug-e.task.md").exists());
     assert!(repo.join("slug-f.task.md").exists());
 }
+
+/// El defecto de `5i`: el regex del `parent` capturaba el delimitador y no lo
+/// restituia. Con `parent:` como **ultima** linea del frontmatter, el `\n` que
+/// se perdia era el del cierre.
+#[test]
+fn renaming_the_parent_keeps_the_newline() {
+    let text = "---\ntitle: X\nparent: 1\n---\n\n# X\n\ncuerpo\n";
+    let (out, changed) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
+    assert!(changed);
+    assert_eq!(out, "---\ntitle: X\nparent: ACC-14\n---\n\n# X\n\ncuerpo\n");
+}
+
+/// Y la propiedad que de verdad se rompio, que no se ve mirando el `parent`:
+/// despues de renombrar, el frontmatter tiene que seguir separandose. Si no,
+/// el archivo entero viaja al proveedor como cuerpo.
+#[test]
+fn the_frontmatter_still_splits_after_renaming_the_parent() {
+    let text = "---\ntitle: X\nstatus: done\nparent: 1\n---\n\n# X\n\ncuerpo\n";
+    let (out, _) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
+    let (fm, body) = worklist::body::split_frontmatter(&out);
+    assert!(fm.contains("parent: ACC-14"), "el frontmatter es el frontmatter: {fm:?}");
+    assert!(!fm.is_empty(), "no se separo nada: todo el archivo seria cuerpo");
+    assert_eq!(body, "\n# X\n\ncuerpo\n", "y el cuerpo es solo el cuerpo");
+}
+
+/// Con `parent:` en el medio el sintoma era otro —dos lineas de YAML pegadas—
+/// y por eso el defecto se escondio: el bloque seguia cerrando igual.
+#[test]
+fn renaming_a_parent_in_the_middle_does_not_glue_the_next_line() {
+    let text = "---\ntitle: X\nparent: 1\nstatus: done\n---\n\ncuerpo\n";
+    let (out, _) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
+    assert!(out.contains("parent: ACC-14\nstatus: done"), "{out:?}");
+}
