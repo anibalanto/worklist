@@ -15,8 +15,27 @@ pub struct RejectedKey {
 
 const ALL_ZEROS: &str = "0000000000000000000000000000000000000000";
 
-fn is_window_ref(refname: &str) -> bool {
-    refname.starts_with("refs/heads/sprint/") || refname == "refs/heads/backlog"
+/// Las tres clases que los hooks distinguen. Ver `concepts/sync.md` § "Dos
+/// clases de rama, y el nombre dice qué se puede hacer".
+#[derive(Debug, PartialEq, Eq)]
+pub enum RefClass {
+    /// `refs/heads/secure/**` — una ventana: se verifica y se le puede empujar.
+    Secure,
+    /// `refs/heads/insecure/**` — el panorama: no se puede verificar, asi que
+    /// tampoco aceptar escrituras. Es lo que vuelve cierta la palabra.
+    Insecure,
+    /// No es del worklist: los hooks no opinan.
+    Other,
+}
+
+pub fn classify(refname: &str) -> RefClass {
+    if refname.starts_with("refs/heads/secure/") {
+        RefClass::Secure
+    } else if refname.starts_with("refs/heads/insecure/") {
+        RefClass::Insecure
+    } else {
+        RefClass::Other
+    }
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
@@ -54,7 +73,7 @@ pub fn check_one(
     refname: &str,
     provider: &dyn Provider,
 ) -> Result<Vec<RejectedKey>> {
-    if !is_window_ref(refname) || old == ALL_ZEROS {
+    if classify(refname) != RefClass::Secure || old == ALL_ZEROS {
         return Ok(vec![]);
     }
 

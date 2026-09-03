@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::Command;
-use worklist::check_push::check_one;
+use worklist::check_push::{check_one, classify, RefClass};
 use worklist::creator::{dry_run_plan, AcliCreator, Creator};
 use worklist::provider::FileProvider;
 
@@ -104,7 +104,7 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
 
     let lines = read_hook_lines(stdin)?;
     for (_old, new, refname) in lines {
-        if !(refname.starts_with("refs/heads/sprint/") || refname == "refs/heads/backlog") {
+        if classify(&refname) != RefClass::Secure {
             continue;
         }
         let r = worklist::assign::assign_window(&repo, &refname, &new, &base, &creator, dry_run)?;
@@ -176,6 +176,14 @@ fn cmd_check_push(provider_file: PathBuf, stdin: bool) -> Result<()> {
 
     let mut any_rejected = false;
     for (old, _new, refname) in lines {
+        if classify(&refname) == RefClass::Insecure {
+            any_rejected = true;
+            println!(
+                "reject: {refname} es una rama insegura — no se puede verificar, asi que no acepta escrituras."
+            );
+            println!("        Recorta una ventana segura (secure/…) y empuja ahi.");
+            continue;
+        }
         let rejected = check_one(&repo, &old, &refname, &provider)?;
         for r in rejected {
             any_rejected = true;

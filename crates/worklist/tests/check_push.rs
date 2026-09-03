@@ -41,7 +41,7 @@ fn coincide_no_rechaza_nada() {
     let provider = FileProvider::new(&provider_file);
     provider.set_status("ACC-101", "open").unwrap();
 
-    let rejected = check_one(repo, &tip, "refs/heads/sprint/10", &provider).unwrap();
+    let rejected = check_one(repo, &tip, "refs/heads/secure/sprint/10", &provider).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -53,7 +53,7 @@ fn el_proveedor_se_movio_y_se_rechaza() {
     let provider = FileProvider::new(&provider_file);
     provider.set_status("ACC-101", "done").unwrap(); // alguien lo cerro en Jira
 
-    let rejected = check_one(repo, &tip, "refs/heads/sprint/10", &provider).unwrap();
+    let rejected = check_one(repo, &tip, "refs/heads/secure/sprint/10", &provider).unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].key, "ACC-101");
     assert_eq!(rejected[0].tip_status, "open");
@@ -78,6 +78,30 @@ fn una_rama_nueva_sin_tip_anterior_no_se_chequea() {
     let provider = FileProvider::new(repo.join("provider.json"));
 
     let all_zeros = "0".repeat(40);
-    let rejected = check_one(repo, &all_zeros, "refs/heads/sprint/11", &provider).unwrap();
+    let rejected = check_one(repo, &all_zeros, "refs/heads/secure/sprint/11", &provider).unwrap();
+    assert!(rejected.is_empty());
+}
+
+#[test]
+fn las_tres_clases_de_rama_se_distinguen_por_el_prefijo() {
+    use worklist::check_push::{classify, RefClass};
+    assert_eq!(classify("refs/heads/secure/sprint/10"), RefClass::Secure);
+    assert_eq!(classify("refs/heads/insecure/all"), RefClass::Insecure);
+    assert_eq!(classify("refs/heads/insecure/backlog"), RefClass::Insecure);
+    // Lo que no es del worklist no es de nadie: los hooks no opinan.
+    assert_eq!(classify("refs/heads/main"), RefClass::Other);
+    assert_eq!(classify("refs/heads/sprint/10"), RefClass::Other);
+}
+
+#[test]
+fn una_insegura_no_se_verifica_aunque_el_proveedor_se_haya_movido() {
+    // No es que este limpia: es que no se puede preguntar por ella. Quien la
+    // rechaza es el hook, antes de llegar aca.
+    let (dir, tip) = seed_repo();
+    let repo = dir.path();
+    let provider = FileProvider::new(repo.join("provider.json"));
+    provider.set_status("ACC-101", "done").unwrap();
+
+    let rejected = check_one(repo, &tip, "refs/heads/insecure/all", &provider).unwrap();
     assert!(rejected.is_empty());
 }
