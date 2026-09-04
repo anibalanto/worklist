@@ -123,7 +123,46 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
 }
 
 /// Produce la rama de la ventana con esos archivos y nada mas.
-pub fn open(repo: &Path, sprint_id: &str, from: &str, dry_run: bool) -> Result<(Vec<String>, String)> {
+/// Los commits que tiene `branch` y no tiene `head`: lo que un corte nuevo
+/// descartaria.
+///
+/// Vacio quiere decir que la rama no existe, o que su punta ya esta contenida
+/// en el corte nuevo. Cualquier otra cosa es trabajo que se perderia.
+/// Si `branch` esta checkouteada en algun worktree, cual.
+///
+/// `git branch -f` se niega a mover una rama con worktree activo; `update-ref`
+/// no, y la mueve dejando el indice del worktree apuntando al arbol anterior.
+/// El resultado es un `git status` con archivos "modificados" que nadie toco, y
+/// un `git merge` que se niega a seguir por cambios locales que no existen.
+fn checked_out_at(repo: &Path, branch: &str) -> Option<String> {
+    let listing = git_output(repo, &["worktree", "list", "--porcelain"]).ok()?;
+    let mut path = None;
+    for line in listing.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(p.to_string());
+        } else if line.strip_prefix("branch ") == Some(branch) {
+            return path;
+        }
+    }
+    None
+}
+
+fn would_discard(repo: &Path, branch: &str, head: &str) -> Vec<String> {
+    if git_output(repo, &["rev-parse", "--verify", "--quiet", branch]).is_err() {
+        return Vec::new();
+    }
+    git_output(repo, &["log", "--oneline", &format!("{head}..{branch}")])
+        .map(|o| o.lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default()
+}
+
+pub fn open(
+    repo: &Path,
+    sprint_id: &str,
+    from: &str,
+    dry_run: bool,
+    force: bool,
+) -> Result<(Vec<String>, String)> {
     let files = window_files(repo, from, sprint_id)?;
     if dry_run {
         return Ok((files, String::new()));
@@ -149,6 +188,42 @@ pub fn open(repo: &Path, sprint_id: &str, from: &str, dry_run: bool) -> Result<(
 
     let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
     let head = result?;
+
+    // **Abrir es una vez.** Una ventana que ya vivio tiene encima lo que el
+    // servidor escribio —los `rename` y los `normalize:`— y eso no esta en el
+    // panorama, porque las claves quedan en la rama de cada ventana. Recortar
+    // de nuevo no actualiza: reemplaza, y se lleva eso puesto, mas lo que
+    // alguien haya editado adentro. Ver `commands/window-open.md`.
+    // Mover una rama con worktree activo deja el indice desincronizado, y el
+    // sintoma no dice la causa: archivos "modificados" que nadie toco.
+    if let Some(wt) = checked_out_at(repo, &branch) {
+        bail!(
+            "secure/sprint/{sprint_id} esta checkouteada en un worktree y no se puede mover:\n\
+             \x20 {wt}\n\
+             \n\
+             moverla dejaria ese worktree con el indice del arbol anterior. Saca el\n\
+             worktree primero, o traelo con un merge en vez de recortar."
+        );
+    }
+
+    let discarded = would_discard(repo, &branch, &head);
+    if !discarded.is_empty() && !force {
+        let muestra: Vec<&String> = discarded.iter().take(3).collect();
+        let resto = discarded.len().saturating_sub(muestra.len());
+        let mas = if resto > 0 { format!("\n  … y {resto} mas") } else { String::new() };
+        let lineas = muestra.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ");
+        bail!(
+            "secure/sprint/{sprint_id} ya existe y tiene {n} commit(s) que este corte no contiene\n\
+\x20 {lineas}{mas}\n\
+\n\
+recortar de nuevo los descarta. Para traer lo del servidor:\n\
+\x20   git fetch <remoto> && git merge --ff-only <remoto>/secure/sprint/{sprint_id}\n\
+\n\
+Para descartarlos igual: --force",
+            n = discarded.len(),
+        );
+    }
+
     git_output(repo, &["update-ref", &branch, &head])?;
     Ok((files, head))
 }

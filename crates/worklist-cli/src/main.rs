@@ -71,6 +71,9 @@ enum WindowCmd {
         from: String,
         #[arg(long)]
         dry_run: bool,
+        /// Recorta aunque la rama ya exista con commits propios, descartandolos.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -97,9 +100,9 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Window { sub: WindowCmd::Open { sprint_id, from, dry_run } } => {
+        Cmd::Window { sub: WindowCmd::Open { sprint_id, from, dry_run, force } } => {
             let repo = std::env::current_dir()?;
-            let (files, head) = worklist::window::open(&repo, &sprint_id, &from, dry_run)?;
+            let (files, head) = worklist::window::open(&repo, &sprint_id, &from, dry_run, force)?;
             println!("secure/sprint/{sprint_id}: {} archivo(s)", files.len());
             for f in &files {
                 println!("  {f}");
