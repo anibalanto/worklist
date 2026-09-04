@@ -1,0 +1,7 @@
+file: crates/worklist/src/port.rs
+query: |-
+  (impl_item
+    type: (type_identifier) @n0 (#eq? @n0 "Op")
+    body: (declaration_list
+    (function_item
+    name: (identifier) @n1 (#eq? @n1 "transport")) @target))
