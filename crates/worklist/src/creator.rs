@@ -44,6 +44,12 @@ pub trait Creator {
     ) -> Result<Assignment>;
     /// `a` se relaciona con `b`. Idempotente, como `link_blocks`.
     fn link_relates(&self, a: &str, b: &str) -> Result<bool>;
+    /// Pisa el titulo de un item que ya existe.
+    ///
+    /// Es lo que se ve en el board, asi que un titulo que diverge es peor que
+    /// un cuerpo que diverge. Ver `concepts/sync.md` seccion "Un item que ya
+    /// tiene clave se actualiza".
+    fn set_summary(&self, key: &str, title: &str) -> Result<()>;
     /// Pisa la descripcion de un item ya creado. Es la pasada 2: el cuerpo no
     /// puede viajar en la creacion porque ahi los renombres todavia no
     /// terminaron. Ver `concepts/sync.md`.
@@ -297,6 +303,14 @@ impl Creator for AcliCreator {
 
     fn link_relates(&self, a: &str, b: &str) -> Result<bool> {
         self.link(a, b, "Relates")
+    }
+
+    fn set_summary(&self, key: &str, title: &str) -> Result<()> {
+        acli_json(
+            &["jira", "workitem", "edit", "--key", key, "--summary", title, "--yes", "--json"],
+            "edit --summary",
+        )
+        .map(|_| ())
     }
 
     fn set_description(&self, key: &str, adf: &str) -> Result<()> {

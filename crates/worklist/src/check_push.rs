@@ -13,7 +13,7 @@ pub struct RejectedKey {
     pub live_status: String,
 }
 
-const ALL_ZEROS: &str = "0000000000000000000000000000000000000000";
+pub const ALL_ZEROS: &str = "0000000000000000000000000000000000000000";
 
 /// Las tres clases que los hooks distinguen. Ver `concepts/sync.md` § "Dos
 /// clases de rama, y el nombre dice qué se puede hacer".

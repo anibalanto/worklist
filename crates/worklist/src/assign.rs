@@ -37,6 +37,9 @@ pub struct WindowResult {
     /// `(slug, clave)` de las dependencias que apuntan **fuera** de la ventana:
     /// no hay clave que mandarle al proveedor, asi que el vinculo no se creo.
     pub untranslated: Vec<(String, String)>,
+    /// Las claves que este push cambio y que ya estaban resueltas: su cuerpo y
+    /// su titulo se actualizaron en el proveedor.
+    pub updated: Vec<String>,
     pub old_head: String,
     pub new_head: String,
 }
@@ -69,6 +72,35 @@ pub fn pending_requests(repo: &Path, rev: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Las claves de los items que **este push** toco y que ya estaban resueltos.
+///
+/// Que cambio lo dice el push, no el proveedor: el diff entre el tip anterior y
+/// el que llega nombra los archivos, y de ahi salen las claves. Asi un push que
+/// no toca un item no lo re-sube — actualizar uno no puede costar ochenta
+/// llamadas. Ver `concepts/sync.md`.
+///
+/// Con `old` en ceros —una rama nueva— no hay nada que actualizar: todo lo que
+/// trae es un pedido o ya viene resuelto de otra ventana.
+pub fn changed_keys(repo: &Path, old: &str, new_rev: &str) -> Result<Vec<String>> {
+    if old == crate::check_push::ALL_ZEROS {
+        return Ok(Vec::new());
+    }
+    let listing = git_output(repo, &["diff", "--name-only", old, new_rev])?;
+    let mut out = Vec::new();
+    for name in listing.lines() {
+        if !name.ends_with(".md") || name.contains('/') {
+            continue;
+        }
+        if let Some(key) = crate::provider::key_of_filename(name) {
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 fn split_item_name(name: &str) -> Option<(String, String)> {
     for t in crate::TYPES {
         if let Some(stem) = name.strip_suffix(&format!(".{t}.md")) {
@@ -86,13 +118,15 @@ fn split_item_name(name: &str) -> Option<(String, String)> {
 pub fn assign_window(
     repo: &Path,
     refname: &str,
+    old: &str,
     new_rev: &str,
     base: &str,
     creator: &dyn Creator,
     dry_run: bool,
 ) -> Result<Option<WindowResult>> {
     let raw = pending_requests(repo, new_rev)?;
-    if raw.is_empty() {
+    let changed = changed_keys(repo, old, new_rev)?;
+    if raw.is_empty() && changed.is_empty() {
         return Ok(None);
     }
 
@@ -222,6 +256,38 @@ pub fn assign_window(
             }
         }
 
+        // ── Pasada 4: lo que este push cambio y ya tenia clave.
+        //
+        // Los pedidos se crean; esto se actualiza. Sin esta pasada, editar un
+        // item resuelto y empujar dejaba a git y al proveedor divergiendo, con
+        // el hook informando "sin pedidos". Ver `concepts/sync.md`.
+        let mut updated = Vec::new();
+        if !dry_run {
+            // Los recien creados ya subieron su cuerpo en la pasada 2.
+            let recien: Vec<&str> = assigned.iter().map(|a| a.key.as_str()).collect();
+            for key in &changed {
+                if recien.contains(&key.as_str()) {
+                    continue;
+                }
+                let Ok((path, _)) = crate::find_file(&tmp, key) else {
+                    // Se borro en este mismo push: no hay cuerpo que subir, y
+                    // borrar el issue no es de este comando.
+                    continue;
+                };
+                let text = std::fs::read_to_string(&path)?;
+                let (adf, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                if canonical != text {
+                    std::fs::write(&path, &canonical)?;
+                    crate::commit_all(&tmp, &format!("normalize: {key}"))?;
+                }
+                creator.set_description(key, &adf)?;
+                if let Some(title) = title_of(&canonical) {
+                    creator.set_summary(key, &title)?;
+                }
+                updated.push(key.clone());
+            }
+        }
+
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
         Ok(WindowResult {
             refname: refname.to_string(),
@@ -230,6 +296,7 @@ pub fn assign_window(
             linked,
             related,
             untranslated,
+            updated,
             old_head: new_rev.to_string(),
             new_head,
         })

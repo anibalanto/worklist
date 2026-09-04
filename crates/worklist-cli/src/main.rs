@@ -136,17 +136,20 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
     let creator = AcliCreator::new(project);
 
     let lines = read_hook_lines(stdin)?;
-    for (_old, new, refname) in lines {
+    for (old, new, refname) in lines {
         if classify(&refname) != RefClass::Secure {
             continue;
         }
-        let r = worklist::assign::assign_window(&repo, &refname, &new, &base, &creator, dry_run)?;
+        let r =
+            worklist::assign::assign_window(&repo, &refname, &old, &new, &base, &creator, dry_run)?;
         let Some(r) = r else {
-            println!("{refname}: sin pedidos");
+            println!("{refname}: nada que resolver ni que actualizar");
             continue;
         };
-        println!("{}: {} pedido(s)", r.refname, r.assigned.len());
-        println!("  orden: {}", r.order.join(", "));
+        if !r.assigned.is_empty() {
+            println!("{}: {} pedido(s)", r.refname, r.assigned.len());
+            println!("  orden: {}", r.order.join(", "));
+        }
         for a in &r.assigned {
             let refs = match a.rewritten {
                 0 => String::new(),
@@ -172,6 +175,9 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
         }
         for (story, task) in &r.related {
             println!("  vinculo: {story} Relates {task}");
+        }
+        for key in &r.updated {
+            println!("  actualizado en el proveedor: {key}");
         }
         for (dep, key) in &r.untranslated {
             println!(
