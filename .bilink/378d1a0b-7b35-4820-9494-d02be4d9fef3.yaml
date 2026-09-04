@@ -6,14 +6,14 @@ endpoint:
     - agree:
       - test
       link: capture 2a9761d270193509711874cfc625c19c
-      hash: 8ba99e2d0e5c0c73b3999ce5396fb7ee3998444e85748df808cea9803dba506a
+      hash: 323d53fba76c1ea2240b479e4bb6fe88a51e049c0e0b860dbd22bab6803391df
   1:
     link: capture 1fc0cd7d05cb0fe21cfde351094e9e5c
     accepted:
     - agree:
       - test
       link: capture 1fc0cd7d05cb0fe21cfde351094e9e5c
-      hash: f1941d46b2f48d4a3c127e558b59d0aebf8140bc773419d73640c739a7449835
-      hash_ast: 104e81be8d5f5fa67ff391eaac8767da01c7d4f29e63ba0888cce9c8f8efca0f
+      hash: e5f48b494d04c23dd9a86859fa56aafc0fed61683cb1395a23cf9daeb0b8b683
+      hash_ast: 6aebe6f4ffedb537610d297f6e1354ab0e577fd6516e8320f136d984450857be
       n: declined
     name: el-reparto

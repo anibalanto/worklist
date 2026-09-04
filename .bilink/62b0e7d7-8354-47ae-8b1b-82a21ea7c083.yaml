@@ -1,0 +1,19 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+    accepted:
+    - agree:
+      - test
+      link: capture a549d81b0129599871b8f3922266e922
+      hash: f2ed72324cd6ca0e591bfa7796877c289cd4dc3c48299b3809da3788ae4ad2d3
+  1:
+    link: capture 8374fcd86a40ec9ec9468b2832e9b0e9
+    accepted:
+    - agree:
+      - test
+      link: capture 8374fcd86a40ec9ec9468b2832e9b0e9
+      hash: be2b92f036ef91a3c5668519a239b29882f96c1e9f56abeeadd4d9b8f44e9a74
+      hash_ast: 5ef7144af3d337a72f25424081d0b4ef5af3675cc195f659988ad2e8aec52ff3
+      n: declined
+    name: la-clausura
