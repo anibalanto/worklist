@@ -79,6 +79,25 @@ pub trait Board {
     /// Mete issues en un sprint. **De lote**: el transporte toma decenas por
     /// llamada, y hacerlo de a uno seria una llamada por issue.
     fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> Result<usize>;
+    /// El id del sprint del board que se llame asi, creandolo si no esta.
+    /// Devuelve `(id, si_lo_creo)`.
+    ///
+    /// **El id del board es argumento y no un campo del cliente**: un proyecto
+    /// puede tener varios boards, asi que guardar uno adentro seria afirmar
+    /// algo que no es cierto. Las unicas operaciones que viven en un board son
+    /// las de sprint, y son las unicas que lo piden.
+    ///
+    /// Buscar antes de crear es por lo mismo que `create_or_find`: una corrida
+    /// que crea el sprint y se cae antes de anotar su id lo dejo creado y sin
+    /// clave, y el reintento lo duplicaria. Ver `concepts/sync.md` seccion "Se
+    /// busca por nombre exactamente cuando no hay `key`".
+    fn create_or_find_sprint(&self, board: &str, name: &str) -> Result<(String, bool)>;
+    /// Las claves que el sprint ya tiene adentro.
+    ///
+    /// **No es una verificacion**: es para mandar solo lo que falta. Lo que se
+    /// pidio no hace falta comprobarlo, porque el codigo de salida de
+    /// `jira-cli` es fiel. Ver `concepts/sync.md`.
+    fn sprint_items(&self, board: &str, sprint: &str) -> Result<Vec<String>>;
 }
 
 /// El texto con el que se **busca**, que no es el titulo.
@@ -489,6 +508,124 @@ impl Board for JiraBoard {
         }
         Ok(keys.len())
     }
+
+    fn create_or_find_sprint(&self, board: &str, name: &str) -> Result<(String, bool)> {
+        if let Some(id) = find_sprint(name)? {
+            return Ok((id, false));
+        }
+        let v = acli_json(
+            Op::CreateSprint,
+            None,
+            "sprint create",
+            &["jira", "sprint", "create", "--board", board, "--name", name, "--json"],
+        )?;
+        // El id sale del JSON de la creacion; si no viniera con esa forma, se
+        // lo vuelve a buscar por nombre en vez de fallar. **El sprint ya
+        // existe** a esa altura, asi que abortar dejaria creado algo que la
+        // proxima corrida duplicaria — el unico error que este camino no puede
+        // cometer.
+        if let Some(id) = json_id(&v) {
+            return Ok((id, true));
+        }
+        find_sprint(name)?
+            .map(|id| (id, true))
+            .ok_or_else(|| anyhow::anyhow!("acli sprint create no devolvio 'id' y el sprint {name:?} no aparece en el board: {v}"))
+    }
+
+    fn sprint_items(&self, board: &str, sprint: &str) -> Result<Vec<String>> {
+        let v = acli_json(
+            Op::SprintItems,
+            None,
+            "sprint list-workitems",
+            &[
+                "jira", "sprint", "list-workitems",
+                "--board", board, "--sprint", sprint,
+                "--fields", "key", "--paginate", "--limit", SPRINT_PAGE,
+                "--json",
+            ],
+        )?;
+        Ok(keys_in(&v))
+    }
+}
+
+/// El id de un sprint recien creado, venga como numero o como texto.
+fn json_id(v: &serde_json::Value) -> Option<String> {
+    let id = v.get("id")?;
+    id.as_u64().map(|n| n.to_string()).or_else(|| id.as_str().map(|s| s.to_string()))
+}
+
+/// Cuantos issues se piden por pagina al listar un sprint. De mas que el
+/// sprint mas grande que este worklist tiene; y si algun dia se quedara corto,
+/// lo peor que pasa es re-pedir un `sprint add` de algo que ya estaba, que es
+/// lo mismo que hacer nada.
+const SPRINT_PAGE: &str = "100";
+
+/// Todas las claves de proveedor que aparecen en un `key` de la respuesta.
+///
+/// Se recorre el arbol en vez de asumir la envoltura: `list-workitems` es la
+/// unica salida de `acli` que este sistema no pudo medir contra el board —no
+/// habia ningun sprint con issues adentro contra el cual mirarla— y la forma
+/// de `search` no tiene por que ser la suya. Lo que si es seguro es que una
+/// clave se reconoce sola.
+fn keys_in(v: &serde_json::Value) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, val) in m {
+                    if k == "key" {
+                        if let Some(s) = val.as_str() {
+                            if !crate::is_unassigned(s) && !out.contains(&s.to_string()) {
+                                out.push(s.to_string());
+                            }
+                        }
+                    }
+                    walk(val, out);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, &mut out);
+    out
+}
+
+/// El sprint del board que se llame exactamente asi.
+///
+/// Por `jira-cli`, que **lee el board de su propia config**: es el unico lugar
+/// donde los dos transportes tienen que estar apuntando al mismo board, y que
+/// lo esten es del tutorial de instalacion. Si apuntaran a boards distintos
+/// esta busqueda no encontraria nada y cada reintento crearia un sprint mas.
+///
+/// Una fila es `<id>\t<nombre>` y **el id tiene que ser todo digitos**: asi
+/// una linea de prosa —el "No result found" de un board vacio, que es el
+/// estado del que se parte— no se puede confundir con un sprint.
+fn find_sprint(name: &str) -> Result<Option<String>> {
+    let out = jira(
+        Op::SprintList,
+        None,
+        &[
+            "sprint", "list",
+            // El default es `active,closed`, y los nuestros nacen `future`.
+            "--state", "future,active,closed",
+            "--plain", "--no-headers", "--no-truncate",
+            "--columns", "ID,NAME",
+            "--paginate", "0:100",
+        ],
+    )?;
+    for line in out.lines() {
+        let mut campos = line.split('\t');
+        let (Some(id), Some(n)) = (campos.next(), campos.next()) else { continue };
+        let id = id.trim();
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if n.trim() == name {
+            return Ok(Some(id.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 /// Lo que `--dry-run` imprime, sin llamar a `acli`. El escapado acá es sólo

@@ -56,6 +56,16 @@ pub enum Op {
     /// Meter issues en un sprint. `acli edit` no acepta `additionalAttributes`;
     /// `jira sprint add` toma hasta 50 por llamada.
     AddToSprint,
+    /// Crear el sprint en el board. Pide el id del board, que es de la
+    /// instalacion.
+    CreateSprint,
+    /// Los sprints que el board ya tiene. Por `jira-cli` porque `acli` no
+    /// tiene con que: sus comandos de sprint son `create`, `update`, `view`,
+    /// `list-workitems` y `delete`, y ninguno lista los del board.
+    SprintList,
+    /// Que issues tiene un sprint. Se lee **antes** de agregar, para mandar
+    /// solo los que faltan.
+    SprintItems,
 }
 
 impl Op {
@@ -70,8 +80,10 @@ impl Op {
             | Op::SetDescription
             | Op::Link
             | Op::Snapshot
-            | Op::ParentOf => Transport::Acli,
-            Op::SetParent | Op::AddToSprint => Transport::JiraCli,
+            | Op::ParentOf
+            | Op::CreateSprint
+            | Op::SprintItems => Transport::Acli,
+            Op::SetParent | Op::AddToSprint | Op::SprintList => Transport::JiraCli,
         }
     }
 
@@ -86,6 +98,9 @@ impl Op {
             Op::ParentOf => "leer la epica",
             Op::SetParent => "poner la epica",
             Op::AddToSprint => "meter en el sprint",
+            Op::CreateSprint => "crear el sprint",
+            Op::SprintList => "listar los sprints del board",
+            Op::SprintItems => "leer los issues del sprint",
         }
     }
 }

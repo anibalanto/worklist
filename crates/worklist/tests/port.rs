@@ -10,12 +10,17 @@ fn el_reparto_es_el_de_la_spec() {
     for op in [Op::Search, Op::Create, Op::SetSummary, Op::SetDescription, Op::Link, Op::Snapshot] {
         assert_eq!(op.transport(), Transport::Acli, "{op:?} deberia ir por acli");
     }
-    // Las dos que `acli` no puede: `edit` no acepta ni `parent` ni el sprint.
-    for op in [Op::SetParent, Op::AddToSprint] {
+    // Las que `acli` no puede: `edit` no acepta ni `parent` ni el sprint, y
+    // ninguno de sus comandos de sprint lista los del board.
+    for op in [Op::SetParent, Op::AddToSprint, Op::SprintList] {
         assert_eq!(op.transport(), Transport::JiraCli, "{op:?} deberia ir por jira-cli");
     }
     // Leer la epica si es de `acli`: lo que no puede es escribirla.
     assert_eq!(Op::ParentOf.transport(), Transport::Acli);
+    // Y el sprint se crea y se lee con `acli`: lo unico que no sabe hacer con
+    // uno es meterle un issue y enumerar los del board.
+    assert_eq!(Op::CreateSprint.transport(), Transport::Acli);
+    assert_eq!(Op::SprintItems.transport(), Transport::Acli);
 }
 
 /// Un fallo se lee igual venga de donde venga: la clave, el transporte que se

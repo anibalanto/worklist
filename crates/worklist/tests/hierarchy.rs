@@ -5,139 +5,13 @@
 //! `concepts/sync.md` seccion "La jerarquia entra hasta donde el proveedor la
 //! tiene".
 
+mod common;
+
+use common::{arbol, item, resolve, run, Spy};
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
-use worklist::board::{Assignment, Board};
-
-fn run(repo: &Path, args: &[&str]) {
-    let st = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
-    assert!(st.success(), "git {args:?}");
-}
-
-fn item(repo: &Path, name: &str, parent: Option<&str>) {
-    let p = match parent {
-        Some(p) => format!("parent: {p}\n"),
-        None => String::new(),
-    };
-    std::fs::write(
-        repo.join(name),
-        format!("---\ntitle: {name}\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n{p}---\n\ncuerpo\n"),
-    )
-    .unwrap();
-}
-
-/// Un `Board` que anota lo que se le pidio y nunca sale a la red. Reparte
-/// claves en orden de creacion, que es lo que hace el proveedor real.
-#[derive(Default)]
-struct Spy {
-    created: RefCell<Vec<(String, String, Option<String>)>>,
-    relates: RefCell<Vec<(String, String)>>,
-    blocks: RefCell<Vec<(String, String)>>,
-    /// `(clave, titulo)` de los `set_summary`: lo que se actualizo en el proveedor.
-    summaries: RefCell<Vec<(String, String)>>,
-    /// `(clave, adf)` de los `set_description`.
-    descriptions: RefCell<Vec<(String, String)>>,
-    /// Titulos que el proveedor "ya tiene": `create_or_find` los encuentra.
-    existing: Vec<(String, String)>,
-    /// `clave -> epica` que el proveedor **tiene puesta**, que no es lo mismo
-    /// que la que se pidio al crear.
-    parents: RefCell<Vec<(String, String)>>,
-    /// `(sprint, claves)` de los `add_to_sprint`.
-    sprinted: RefCell<Vec<(String, Vec<String>)>>,
-}
-
-impl Board for Spy {
-    fn create_or_find(
-        &self,
-        title: &str,
-        item_type: &str,
-        _description: &str,
-        parent: Option<&str>,
-    ) -> anyhow::Result<Assignment> {
-        if let Some((_, k)) = self.existing.iter().find(|(t, _)| t == title) {
-            return Ok(Assignment::Found(k.clone()));
-        }
-        let key = format!("ACC-{}", self.created.borrow().len() + 1);
-        self.created.borrow_mut().push((
-            title.to_string(),
-            item_type.to_string(),
-            parent.map(|s| s.to_string()),
-        ));
-        Ok(Assignment::Created(key))
-    }
-    fn set_description(&self, key: &str, adf: &str) -> anyhow::Result<()> {
-        self.descriptions.borrow_mut().push((key.into(), adf.into()));
-        Ok(())
-    }
-    fn link_blocks(&self, blocker: &str, blocked: &str) -> anyhow::Result<bool> {
-        self.blocks.borrow_mut().push((blocker.into(), blocked.into()));
-        Ok(true)
-    }
-    fn link_relates(&self, a: &str, b: &str) -> anyhow::Result<bool> {
-        self.relates.borrow_mut().push((a.into(), b.into()));
-        Ok(true)
-    }
-    fn set_summary(&self, key: &str, title: &str) -> anyhow::Result<()> {
-        self.summaries.borrow_mut().push((key.into(), title.into()));
-        Ok(())
-    }
-    fn parent_of(&self, key: &str) -> anyhow::Result<Option<String>> {
-        Ok(self.parents.borrow().iter().find(|(k, _)| k == key).map(|(_, e)| e.clone()))
-    }
-    fn set_parent(&self, key: &str, epic: &str) -> anyhow::Result<bool> {
-        let mut ps = self.parents.borrow_mut();
-        if ps.iter().any(|(k, e)| k == key && e == epic) {
-            return Ok(false);
-        }
-        ps.retain(|(k, _)| k != key);
-        ps.push((key.into(), epic.into()));
-        Ok(true)
-    }
-    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<usize> {
-        self.sprinted
-            .borrow_mut()
-            .push((sprint.into(), keys.iter().map(|k| k.to_string()).collect()));
-        Ok(keys.len())
-    }
-}
-
-/// `1.epic` -> `n.user-story` -> `o.task`, y una task suelta bajo la epica.
-fn arbol() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let r = &dir.path().join("repo");
-    std::fs::create_dir(r).unwrap();
-    run(r, &["init", "-q", "-b", "insecure/all"]);
-    run(r, &["config", "user.email", "t@t"]);
-    run(r, &["config", "user.name", "t"]);
-    item(r, "1.epic.md", None);
-    item(r, "n.user-story.md", Some("1"));
-    item(r, "o.task.md", Some("n"));
-    item(r, "q.task.md", Some("1"));
-    run(r, &["add", "-A"]);
-    run(r, &["commit", "-qm", "arbol"]);
-    dir
-}
-
-fn resolve(dir: &Path, spy: &Spy) -> worklist::assign::WindowResult {
-    let rev = String::from_utf8(
-        Command::new("git").arg("-C").arg(dir).args(["rev-parse", "HEAD"]).output().unwrap().stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_string();
-    worklist::assign::assign_window(
-        dir,
-        "refs/heads/insecure/all",
-        worklist::check_push::ALL_ZEROS,
-        &rev,
-        "https://x",
-        spy,
-        false,
-    )
-        .unwrap()
-        .unwrap()
-}
+use worklist::board::Board;
 
 /// El `--parent` de una task **no** es su user story: es la epica, por lejos
 /// que quede. Jira rechaza `Tarea` bajo `Historia`.
@@ -248,6 +122,7 @@ fn a_cycle_in_the_parents_is_reported_before_touching_the_provider() {
         &rev,
         "https://x",
         &spy,
+        "701",
         false,
     )
     .unwrap_err()
@@ -335,7 +210,7 @@ fn rev(r: &Path, what: &str) -> String {
 fn resolver(r: &Path, old: &str, spy: &Spy) -> Option<worklist::assign::WindowResult> {
     let new = rev(r, "HEAD");
     worklist::assign::assign_window(
-        r, "refs/heads/secure/sprint/1", old, &new, "https://x", spy, false,
+        r, "refs/heads/secure/sprint/1", old, &new, "https://x", spy, "701", false,
     )
     .unwrap()
 }

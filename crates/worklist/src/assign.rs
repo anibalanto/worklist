@@ -44,8 +44,27 @@ pub struct WindowResult {
     /// Las claves que este push cambio y que ya estaban resueltas: su cuerpo y
     /// su titulo se actualizaron en el proveedor.
     pub updated: Vec<String>,
+    /// Que paso con el sprint de la ventana. `None` si la rama no lleva
+    /// ninguno — una ventana siempre lleva el suyo, pero una rama segura que
+    /// no sea una ventana puede no tenerlo.
+    pub sprint: Option<SprintResult>,
     pub old_head: String,
     pub new_head: String,
+}
+
+/// Lo que la pasada 5 hizo con el sprint de la ventana.
+#[derive(Debug)]
+pub struct SprintResult {
+    /// El numero del worklist — el de `_sprints/17.sprint.md`.
+    pub id: String,
+    /// Su id en el proveedor.
+    pub key: String,
+    /// Si no existia del otro lado y esta corrida lo creo.
+    pub created: bool,
+    /// Las claves que entraron ahora.
+    pub added: Vec<String>,
+    /// Cuantas ya estaban adentro. **Volver a correrlo es esto y nada mas.**
+    pub already: usize,
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
@@ -126,6 +145,7 @@ pub fn assign_window(
     new_rev: &str,
     base: &str,
     board: &dyn Board,
+    board_id: &str,
     dry_run: bool,
 ) -> Result<Option<WindowResult>> {
     // Un borrado de rama llega con `new` en ceros: no hay arbol que resolver, y
@@ -135,7 +155,13 @@ pub fn assign_window(
     }
     let raw = pending_requests(repo, new_rev)?;
     let changed = changed_keys(repo, old, new_rev)?;
-    if raw.is_empty() && changed.is_empty() {
+    let sprint_file = sprint_file(repo, new_rev)?;
+    // **Que no haya nada que asignar no es que no haya nada que hacer.** Una
+    // ventana ya resuelta no trae pedidos ni cambios, y es justo la que tiene
+    // sus issues creados y su sprint sin existir del otro lado. La pasada 5
+    // reconcilia, asi que corre igual. Ver `concepts/sync.md` seccion "Corre
+    // aunque no haya nada que asignar".
+    if raw.is_empty() && changed.is_empty() && sprint_file.is_none() {
         return Ok(None);
     }
 
@@ -310,6 +336,66 @@ pub fn assign_window(
             }
         }
 
+        // ── Pasada 5: el sprint, con la ventana entera ya resuelta.
+        //
+        // Va al final porque la membresia se lee del `items` del `.sprint.md`,
+        // y ahi los ids son slugs hasta que la pasada 1 los reescribe.
+        let sprint = match &sprint_file {
+            None => None,
+            Some((id, file)) => {
+                let path = tmp.join(file);
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("leyendo {file}"))?;
+                let members = sprint_members(&tmp, &sprint_declared(&text))?;
+                if dry_run {
+                    Some(SprintResult {
+                        id: id.clone(),
+                        key: sprint_key(&text).unwrap_or_else(|| "(dry-run)".into()),
+                        created: false,
+                        added: members,
+                        already: 0,
+                    })
+                } else {
+                    // El nombre del otro lado lo escribe el worklist, con la
+                    // regla de siempre: nunca el id solo. Y no es la llave —
+                    // esa es el `key`— asi que cambiarlo no rompe nada.
+                    let nombre = match title_of(&text) {
+                        Some(titulo) => format!("{id} {titulo}"),
+                        None => id.clone(),
+                    };
+                    let (key, created) = match sprint_key(&text) {
+                        Some(k) => (k, false),
+                        None => {
+                            let (k, created) = board.create_or_find_sprint(board_id, &nombre)?;
+                            std::fs::write(&path, with_sprint_key(&text, &k)?)?;
+                            crate::commit_all(&tmp, &format!("sprint: {id} -> {k}"))?;
+                            (k, created)
+                        }
+                    };
+                    // Se lee antes para mandar solo lo que falta, no para
+                    // verificar lo que se mando: el codigo de salida de
+                    // `jira-cli` es fiel. El efecto es que volver a correrlo
+                    // cuesta una lectura y cero escrituras.
+                    let adentro = board.sprint_items(board_id, &key)?;
+                    let faltan: Vec<&str> = members
+                        .iter()
+                        .filter(|m| !adentro.contains(m))
+                        .map(|m| m.as_str())
+                        .collect();
+                    if !faltan.is_empty() {
+                        board.add_to_sprint(&key, &faltan)?;
+                    }
+                    Some(SprintResult {
+                        id: id.clone(),
+                        key,
+                        created,
+                        added: faltan.iter().map(|s| s.to_string()).collect(),
+                        already: members.len() - faltan.len(),
+                    })
+                }
+            }
+        };
+
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
         Ok(WindowResult {
             refname: refname.to_string(),
@@ -319,6 +405,7 @@ pub fn assign_window(
             related,
             untranslated,
             updated,
+            sprint,
             old_head: new_rev.to_string(),
             new_head,
         })
@@ -332,6 +419,112 @@ pub fn assign_window(
         git_output(repo, &["update-ref", refname, &result.new_head])?;
     }
     Ok(Some(result))
+}
+
+/// El `.sprint.md` que el arbol de `rev` lleva, y el numero de sprint que lo
+/// nombra. Una ventana lleva exactamente uno.
+///
+/// **No es un pedido y nunca lo fue**: `split_item_name` descarta cualquier
+/// stem con `/`, asi que `_sprints/17.sprint.md` no entra a la pasada 1. Un
+/// sprint del proveedor no es un issue. Ver `concepts/sync.md` seccion "El
+/// sprint viaja como sprint, no como issue".
+pub fn sprint_file(repo: &Path, rev: &str) -> Result<Option<(String, String)>> {
+    let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
+    let mut found: Vec<(String, String)> = listing
+        .lines()
+        .filter_map(|name| {
+            let id = name.strip_prefix("_sprints/")?.strip_suffix(".sprint.md")?;
+            (!id.contains('/')).then(|| (id.to_string(), name.to_string()))
+        })
+        .collect();
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found.remove(0))),
+        n => bail!(
+            "{rev} lleva {n} sprints y una ventana lleva uno: {}",
+            found.iter().map(|(_, f)| f.as_str()).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+/// El `key` del frontmatter del sprint: su id en el proveedor. **Su ausencia
+/// es que el sprint todavia no existe del otro lado**, igual que un archivo de
+/// item que todavia lleva slug.
+fn sprint_key(text: &str) -> Option<String> {
+    let end = text.find("\n---\n")?;
+    let re = regex::Regex::new(r"(?m)^key:\s*(\S+)$").unwrap();
+    re.captures(&text[..end]).map(|c| c[1].to_string())
+}
+
+/// Anota el `key` en el frontmatter, despues de `items` si esta y al final si
+/// no. Es el unico campo del sprint que escribe el servidor.
+fn with_sprint_key(text: &str, key: &str) -> Result<String> {
+    let Some(end) = text.find("\n---\n") else {
+        bail!("el sprint no tiene frontmatter donde anotar su clave");
+    };
+    let (fm, rest) = text.split_at(end);
+    let re = regex::Regex::new(r"(?m)^items:.*$").unwrap();
+    let fm = match re.find(fm) {
+        Some(m) => format!("{}\nkey: {key}{}", &fm[..m.end()], &fm[m.end()..]),
+        None => format!("{fm}\nkey: {key}"),
+    };
+    Ok(format!("{fm}{rest}"))
+}
+
+/// Los ids que el `items` del sprint declara.
+fn sprint_declared(text: &str) -> Vec<String> {
+    let re = regex::Regex::new(r"(?m)^items:\s*\[([^\]]*)\]").unwrap();
+    let id = regex::Regex::new(r"[A-Za-z0-9_-]+").unwrap();
+    re.captures(text)
+        .map(|c| id.find_iter(&c[1]).map(|m| m.as_str().to_string()).collect())
+        .unwrap_or_default()
+}
+
+/// Los miembros del sprint: la clausura de `items` sobre `parent`.
+///
+/// **`items` nombra los topes, no los miembros.** La regla del ancestro dice
+/// que un item entra con su subarbol entero, asi que una user story esta en la
+/// lista y sus tasks no. Y los ancestros que la ventana trae de solo lectura
+/// —la epica, para que la cadena `parent` cierre adentro del recorte— **no
+/// son miembros**: estan en el arbol porque el recorte los necesita, no porque
+/// sean de la iteracion.
+///
+/// La distincion no es por tipo. Si un dia un sprint nombrara una epica en su
+/// `items`, entraria con su subarbol y esto no cambiaria.
+fn sprint_members(dir: &Path, declared: &[String]) -> Result<Vec<String>> {
+    let mut parents: HashMap<String, String> = HashMap::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let Some(id) = crate::TYPES
+            .iter()
+            .filter(|t| **t != "sprint")
+            .find_map(|t| name.strip_suffix(&format!(".{t}.md")))
+        else {
+            continue;
+        };
+        if let Some(p) = parent_of(&std::fs::read_to_string(&path)?) {
+            parents.insert(id.to_string(), p);
+        }
+    }
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (id, p) in &parents {
+        children.entry(p.as_str()).or_default().push(id.as_str());
+    }
+
+    let mut members: Vec<String> = Vec::new();
+    let mut pending: Vec<String> = declared.to_vec();
+    while let Some(id) = pending.pop() {
+        if members.contains(&id) {
+            continue;
+        }
+        for c in children.get(id.as_str()).into_iter().flatten() {
+            pending.push(c.to_string());
+        }
+        members.push(id);
+    }
+    members.sort();
+    Ok(members)
 }
 
 fn tempdir_path(repo: &Path, refname: &str) -> std::path::PathBuf {

@@ -44,6 +44,12 @@ enum Cmd {
     AssignKeys {
         #[arg(long)]
         project: String,
+        /// El id del board donde vive el sprint de la ventana. Es de la
+        /// instalacion, no del worklist, y **no tiene default**: sin el la
+        /// pasada del sprint no puede correr, y saltearla sola porque falta un
+        /// dato de configuracion es la peor forma de enterarse de que falta.
+        #[arg(long)]
+        board: String,
         /// Base del proveedor, para traducir los links a otros items.
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
@@ -119,8 +125,8 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::AssignKeys { project, base, stdin, dry_run } => {
-            cmd_assign_keys(project, base, stdin, dry_run)
+        Cmd::AssignKeys { project, board, base, stdin, dry_run } => {
+            cmd_assign_keys(project, board, base, stdin, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             let description = format!("Fuente: {source}");
@@ -139,7 +145,13 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) -> Result<()> {
+fn cmd_assign_keys(
+    project: String,
+    board_id: String,
+    base: String,
+    stdin: bool,
+    dry_run: bool,
+) -> Result<()> {
     // Antes de mirar el arbol: sin credencial, la mitad de abajo de la tabla
     // del puerto no existe, y enterarse con una ventana a medio resolver es la
     // peor forma. `--dry-run` no habla con nadie, asi que no la pide.
@@ -154,8 +166,9 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
         if classify(&refname) != RefClass::Secure {
             continue;
         }
-        let r =
-            worklist::assign::assign_window(&repo, &refname, &old, &new, &base, &board, dry_run)?;
+        let r = worklist::assign::assign_window(
+            &repo, &refname, &old, &new, &base, &board, &board_id, dry_run,
+        )?;
         let Some(r) = r else {
             println!("{refname}: nada que resolver ni que actualizar");
             continue;
@@ -196,6 +209,17 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
         for (dep, key) in &r.untranslated {
             println!(
                 "  ! {key} depende de '{dep}', que no esta en esta ventana — el vinculo no se creo"
+            );
+        }
+        if let Some(s) = &r.sprint {
+            let creado = if s.created { " (creado)" } else { "" };
+            println!(
+                "  sprint {} -> {}{}: {} issue(s) agregados, {} ya estaban",
+                s.id,
+                s.key,
+                creado,
+                s.added.len(),
+                s.already
             );
         }
         if r.new_head != r.old_head {
