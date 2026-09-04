@@ -8,7 +8,23 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub trait Provider {
-    fn state(&self, keys: &[String]) -> Result<HashMap<String, String>>;
+    /// Lo que el proveedor tiene **en vivo** para esas claves.
+    ///
+    /// El `status` lo mira el compare-and-swap sobre toda la rama; el titulo y
+    /// el cuerpo, solo sobre lo que un push escribe. Ver `concepts/sync.md`
+    /// seccion "Dos alcances, porque son dos promesas".
+    fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>>;
+}
+
+/// Lo que el proveedor sabe de un item. `None` en un campo es "este proveedor
+/// no lo informa", que no es lo mismo que vacio: el de prueba solo lleva
+/// status, y comparar contra su ausencia daria siempre distinto.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Snapshot {
+    pub status: Option<String>,
+    pub summary: Option<String>,
+    /// El cuerpo tal como el proveedor lo devuelve — ADF, en el caso de Jira.
+    pub description: Option<String>,
 }
 
 pub struct FileProvider {
@@ -45,11 +61,17 @@ impl FileProvider {
 }
 
 impl Provider for FileProvider {
-    fn state(&self, keys: &[String]) -> Result<HashMap<String, String>> {
+    /// El de prueba solo lleva `clave -> status`: los otros campos van en
+    /// `None`, que es "no lo informa" y no "esta vacio".
+    fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>> {
         let all = self.read_all()?;
         Ok(keys
             .iter()
-            .filter_map(|k| all.get(k).map(|v| (k.clone(), v.clone())))
+            .filter_map(|k| {
+                all.get(k).map(|v| {
+                    (k.clone(), Snapshot { status: Some(v.clone()), ..Default::default() })
+                })
+            })
             .collect())
     }
 }
@@ -68,3 +90,64 @@ pub fn status_of(text: &str) -> Option<String> {
     re.captures(text).map(|c| c[1].to_string())
 }
 
+
+/// El proveedor real: Jira, por `acli`.
+///
+/// **Una sola llamada para N claves.** `search --jql "key in (…)"` con
+/// `--fields` trae status, titulo y descripcion juntos; los campos por defecto
+/// no incluyen la descripcion, asi que hay que pedirla.
+pub struct AcliProvider {
+    project: String,
+}
+
+impl AcliProvider {
+    pub fn new(project: impl Into<String>) -> Self {
+        AcliProvider { project: project.into() }
+    }
+}
+
+impl Provider for AcliProvider {
+    fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // Las claves las genera el propio sistema y matchean `^[A-Z]+-\d+$`, asi
+        // que no hay texto libre entrando al JQL — el problema de `search_text`
+        // no se repite aca.
+        let jql = format!("project = {} AND key in ({})", self.project, keys.join(", "));
+        let parsed = crate::creator::acli_json(
+            &[
+                "jira", "workitem", "search",
+                "--jql", &jql,
+                "--fields", "key,status,summary,description",
+                "--json", "--paginate",
+            ],
+            "search --fields",
+        )?;
+        let mut out = HashMap::new();
+        for item in parsed.as_array().into_iter().flatten() {
+            let Some(key) = item.get("key").and_then(|k| k.as_str()) else { continue };
+            let f = item.get("fields");
+            let get = |name: &str| -> Option<String> {
+                f?.get(name)?.get("name")?.as_str().map(|s| s.to_string())
+            };
+            out.insert(
+                key.to_string(),
+                Snapshot {
+                    status: get("status"),
+                    summary: f
+                        .and_then(|f| f.get("summary"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    // La descripcion viene como ADF, que es lo que el puerto
+                    // promete: el cuerpo tal como el proveedor lo devuelve.
+                    description: f
+                        .and_then(|f| f.get("description"))
+                        .filter(|v| !v.is_null())
+                        .map(|v| v.to_string()),
+                },
+            );
+        }
+        Ok(out)
+    }
+}

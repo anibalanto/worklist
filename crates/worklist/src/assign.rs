@@ -360,7 +360,7 @@ fn depends_of(text: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn title_of(text: &str) -> Option<String> {
+pub(crate) fn title_of(text: &str) -> Option<String> {
     let re = regex::Regex::new(r"(?m)^title:\s*(.+)$").unwrap();
     let raw = re.captures(text)?[1].trim().to_string();
     // El frontmatter puede citar el titulo si lleva `:` u otros caracteres.

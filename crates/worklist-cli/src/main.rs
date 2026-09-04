@@ -18,8 +18,13 @@ struct Cli {
 enum Cmd {
     /// El compare-and-swap de una ventana. Pensado para `hooks/pre-receive`.
     CheckPush {
-        #[arg(long)]
-        provider_file: PathBuf,
+        /// El proveedor de prueba: un archivo `clave -> status`. Solo informa
+        /// el status, asi que con el no se compara ni el cuerpo ni el titulo.
+        #[arg(long, conflicts_with = "project")]
+        provider_file: Option<PathBuf>,
+        /// El proveedor real, por `acli`. Informa status, titulo y cuerpo.
+        #[arg(long, conflicts_with = "provider_file")]
+        project: Option<String>,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo de pre-receive.
         #[arg(long)]
         stdin: bool,
@@ -90,7 +95,9 @@ enum ProviderCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::CheckPush { provider_file, stdin } => cmd_check_push(provider_file, stdin),
+        Cmd::CheckPush { provider_file, project, stdin } => {
+            cmd_check_push(provider_file, project, stdin)
+        }
         Cmd::Provider { sub: ProviderCmd::SetStatus { provider_file, clave, status } } => {
             let provider = FileProvider::new(provider_file);
             let old = provider.set_status(&clave, &status)?;
@@ -213,8 +220,19 @@ fn read_hook_lines(stdin: bool) -> Result<Vec<(String, String, String)>> {
     Ok(out)
 }
 
-fn cmd_check_push(provider_file: PathBuf, stdin: bool) -> Result<()> {
-    let provider = FileProvider::new(provider_file);
+fn cmd_check_push(
+    provider_file: Option<PathBuf>,
+    project: Option<String>,
+    stdin: bool,
+) -> Result<()> {
+    // Uno de los dos, y el de prueba solo informa el status: con el, el cuerpo
+    // y el titulo no se comparan. Ver `concepts/sync.md`.
+    let provider: Box<dyn worklist::provider::Provider> = match (provider_file, project) {
+        (Some(f), None) => Box::new(FileProvider::new(f)),
+        (None, Some(p)) => Box::new(worklist::provider::AcliProvider::new(p)),
+        _ => anyhow::bail!("hace falta --provider-file o --project, y no los dos"),
+    };
+    let provider = provider.as_ref();
     let repo = std::env::current_dir()?;
 
     let lines: Vec<(String, String, String)> = if stdin {
@@ -235,7 +253,7 @@ fn cmd_check_push(provider_file: PathBuf, stdin: bool) -> Result<()> {
     };
 
     let mut any_rejected = false;
-    for (old, _new, refname) in lines {
+    for (old, new, refname) in lines {
         if classify(&refname) == RefClass::Insecure {
             any_rejected = true;
             println!(
@@ -244,12 +262,12 @@ fn cmd_check_push(provider_file: PathBuf, stdin: bool) -> Result<()> {
             println!("        Recorta una ventana segura (secure/…) y empuja ahi.");
             continue;
         }
-        let rejected = check_one(&repo, &old, &refname, &provider)?;
+        let rejected = check_one(&repo, &old, &new, &refname, provider)?;
         for r in rejected {
             any_rejected = true;
             println!(
-                "reject: {} status era \"{}\" en el tip, el proveedor dice \"{}\"",
-                r.key, r.tip_status, r.live_status
+                "reject: {} {} era \"{}\" en el tip, el proveedor dice \"{}\"",
+                r.key, r.field, r.tip_status, r.live_status
             );
         }
     }

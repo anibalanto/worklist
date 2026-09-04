@@ -105,7 +105,7 @@ pub fn jira_type(worklist_type: &str) -> Result<&'static str> {
 /// alcanza — y buscar ese texto tampoco, porque es de una herramienta ajena y
 /// esta en el idioma de quien la corre. El resultado se lee de la salida
 /// estructurada. Ver `concepts/sync.md` seccion "El exito se lee de la salida".
-fn acli_json(args: &[&str], what: &str) -> Result<serde_json::Value> {
+pub(crate) fn acli_json(args: &[&str], what: &str) -> Result<serde_json::Value> {
     let out = Command::new("acli")
         .args(args)
         .output()

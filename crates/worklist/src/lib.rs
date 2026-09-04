@@ -242,24 +242,23 @@ pub fn topo_order(repo: &Path, slugs: &[String]) -> Result<Vec<String>> {
     Ok(order)
 }
 
-/// `git -C <repo>`, con el entorno de git **limpiado**.
+/// `git -C <repo>`, sin las variables de **ubicación** que le ganan al `-C`.
 ///
-/// Un hook de recepción hereda `GIT_DIR=.` y a veces `GIT_WORK_TREE`, y esas
-/// variables le ganan al `-C`: cualquier git que corra desde otro directorio
-/// —un worktree temporal, por ejemplo— resuelve contra el repo equivocado y
-/// falla con *"no es un repositorio git"*. Sacarlas acá y no en el script del
-/// hook es lo que hace que la librería no dependa de quién la llama.
+/// Un hook de recepción hereda `GIT_DIR=.` y a veces `GIT_WORK_TREE`, y esas le
+/// ganan al `-C`: cualquier git que corra desde otro directorio —un worktree
+/// temporal, por ejemplo— resuelve contra el repo equivocado y falla con *"no
+/// es un repositorio git"*. Sacarlas acá y no en el script del hook es lo que
+/// hace que la librería no dependa de quién la llama.
+///
+/// **Las de objetos no se tocan**, y la diferencia importa: en `pre-receive`
+/// los commits que llegan todavía no están en el repo, viven en una cuarentena
+/// que `GIT_QUARANTINE_PATH` y `GIT_OBJECT_DIRECTORY` señalan. Quitarlas deja a
+/// git sin poder leer lo que el push trae — `bad object <sha>`— y eso no se
+/// notaba mientras el compare-and-swap sólo miraba el tip anterior.
 pub(crate) fn git_command(repo: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(repo);
-    for var in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_QUARANTINE_PATH",
-    ] {
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
         cmd.env_remove(var);
     }
     cmd
