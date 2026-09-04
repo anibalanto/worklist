@@ -4,7 +4,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::Command;
 use worklist::check_push::{check_one, classify, RefClass};
-use worklist::creator::{dry_run_plan, AcliCreator, Creator};
+use worklist::board::{dry_run_plan, JiraBoard, Board};
 use worklist::provider::FileProvider;
 
 #[derive(Parser)]
@@ -128,10 +128,11 @@ fn main() -> Result<()> {
                 println!("{}", dry_run_plan(&project, &r#type, &titulo, &description)?);
                 return Ok(());
             }
-            let creator = AcliCreator::new(project);
+            worklist::port::preflight()?;
+            let board = JiraBoard::new(project);
             // Sin `--parent`: este comando resuelve un item suelto, y la
             // jerarquia la calcula `assign-keys` sobre la ventana entera.
-            let outcome = creator.create_or_find(&titulo, &r#type, &description, None)?;
+            let outcome = board.create_or_find(&titulo, &r#type, &description, None)?;
             println!("{}", outcome.key());
             Ok(())
         }
@@ -139,8 +140,14 @@ fn main() -> Result<()> {
 }
 
 fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) -> Result<()> {
+    // Antes de mirar el arbol: sin credencial, la mitad de abajo de la tabla
+    // del puerto no existe, y enterarse con una ventana a medio resolver es la
+    // peor forma. `--dry-run` no habla con nadie, asi que no la pide.
+    if !dry_run {
+        worklist::port::preflight()?;
+    }
     let repo = std::env::current_dir()?;
-    let creator = AcliCreator::new(project);
+    let board = JiraBoard::new(project);
 
     let lines = read_hook_lines(stdin)?;
     for (old, new, refname) in lines {
@@ -148,7 +155,7 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
             continue;
         }
         let r =
-            worklist::assign::assign_window(&repo, &refname, &old, &new, &base, &creator, dry_run)?;
+            worklist::assign::assign_window(&repo, &refname, &old, &new, &base, &board, dry_run)?;
         let Some(r) = r else {
             println!("{refname}: nada que resolver ni que actualizar");
             continue;
@@ -229,7 +236,10 @@ fn cmd_check_push(
     // y el titulo no se comparan. Ver `concepts/sync.md`.
     let provider: Box<dyn worklist::provider::Provider> = match (provider_file, project) {
         (Some(f), None) => Box::new(FileProvider::new(f)),
-        (None, Some(p)) => Box::new(worklist::provider::AcliProvider::new(p)),
+        (None, Some(p)) => {
+            worklist::port::preflight()?;
+            Box::new(worklist::provider::JiraProvider::new(p))
+        }
         _ => anyhow::bail!("hace falta --provider-file o --project, y no los dos"),
     };
     let provider = provider.as_ref();

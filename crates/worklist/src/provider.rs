@@ -96,17 +96,17 @@ pub fn status_of(text: &str) -> Option<String> {
 /// **Una sola llamada para N claves.** `search --jql "key in (…)"` con
 /// `--fields` trae status, titulo y descripcion juntos; los campos por defecto
 /// no incluyen la descripcion, asi que hay que pedirla.
-pub struct AcliProvider {
+pub struct JiraProvider {
     project: String,
 }
 
-impl AcliProvider {
+impl JiraProvider {
     pub fn new(project: impl Into<String>) -> Self {
-        AcliProvider { project: project.into() }
+        JiraProvider { project: project.into() }
     }
 }
 
-impl Provider for AcliProvider {
+impl Provider for JiraProvider {
     fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>> {
         if keys.is_empty() {
             return Ok(HashMap::new());
@@ -115,14 +115,16 @@ impl Provider for AcliProvider {
         // que no hay texto libre entrando al JQL — el problema de `search_text`
         // no se repite aca.
         let jql = format!("project = {} AND key in ({})", self.project, keys.join(", "));
-        let parsed = crate::creator::acli_json(
+        let parsed = crate::board::acli_json(
+            crate::port::Op::Snapshot,
+            None,
+            "search --fields",
             &[
                 "jira", "workitem", "search",
                 "--jql", &jql,
                 "--fields", "key,status,summary,description",
                 "--json", "--paginate",
             ],
-            "search --fields",
         )?;
         let mut out = HashMap::new();
         for item in parsed.as_array().into_iter().flatten() {

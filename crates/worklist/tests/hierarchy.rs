@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
-use worklist::creator::{Assignment, Creator};
+use worklist::board::{Assignment, Board};
 
 fn run(repo: &Path, args: &[&str]) {
     let st = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
@@ -27,7 +27,7 @@ fn item(repo: &Path, name: &str, parent: Option<&str>) {
     .unwrap();
 }
 
-/// Un `Creator` que anota lo que se le pidio y nunca sale a la red. Reparte
+/// Un `Board` que anota lo que se le pidio y nunca sale a la red. Reparte
 /// claves en orden de creacion, que es lo que hace el proveedor real.
 #[derive(Default)]
 struct Spy {
@@ -40,9 +40,14 @@ struct Spy {
     descriptions: RefCell<Vec<(String, String)>>,
     /// Titulos que el proveedor "ya tiene": `create_or_find` los encuentra.
     existing: Vec<(String, String)>,
+    /// `clave -> epica` que el proveedor **tiene puesta**, que no es lo mismo
+    /// que la que se pidio al crear.
+    parents: RefCell<Vec<(String, String)>>,
+    /// `(sprint, claves)` de los `add_to_sprint`.
+    sprinted: RefCell<Vec<(String, Vec<String>)>>,
 }
 
-impl Creator for Spy {
+impl Board for Spy {
     fn create_or_find(
         &self,
         title: &str,
@@ -76,6 +81,24 @@ impl Creator for Spy {
     fn set_summary(&self, key: &str, title: &str) -> anyhow::Result<()> {
         self.summaries.borrow_mut().push((key.into(), title.into()));
         Ok(())
+    }
+    fn parent_of(&self, key: &str) -> anyhow::Result<Option<String>> {
+        Ok(self.parents.borrow().iter().find(|(k, _)| k == key).map(|(_, e)| e.clone()))
+    }
+    fn set_parent(&self, key: &str, epic: &str) -> anyhow::Result<bool> {
+        let mut ps = self.parents.borrow_mut();
+        if ps.iter().any(|(k, e)| k == key && e == epic) {
+            return Ok(false);
+        }
+        ps.retain(|(k, _)| k != key);
+        ps.push((key.into(), epic.into()));
+        Ok(true)
+    }
+    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<usize> {
+        self.sprinted
+            .borrow_mut()
+            .push((sprint.into(), keys.iter().map(|k| k.to_string()).collect()));
+        Ok(keys.len())
     }
 }
 

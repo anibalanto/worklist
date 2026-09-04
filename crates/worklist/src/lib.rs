@@ -4,13 +4,14 @@
 //!
 //! `resolve_batch` no habla con ningun proveedor: quien asigna la clave nueva
 //! es quien la llama, pasandole el mapa ya resuelto. `check_push` si habla
-//! con uno, vía el puerto `Provider` — la integracion real con Jira es otra
-//! implementacion del mismo trait.
+//! con uno, via el puerto: `port` declara las operaciones y a que transporte
+//! le toca cada una, `board` y `provider` las implementan contra Jira.
 
 pub mod assign;
+pub mod board;
 pub mod body;
 pub mod check_push;
-pub mod creator;
+pub mod port;
 pub mod provider;
 pub mod window;
 

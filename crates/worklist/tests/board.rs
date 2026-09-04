@@ -3,7 +3,8 @@
 //! El create-or-find real contra un board necesita permiso explícito — no
 //! corre en CI.
 
-use worklist::creator::{dry_run_plan, jira_type, search_text};
+use worklist::port::Op;
+use worklist::board::{dry_run_plan, jira_type, search_text};
 
 /// Ya no hay nada que escapar: el texto de busqueda no puede contener una
 /// comilla, porque no es alfanumerica. La query sale sin metacaracteres en vez
@@ -57,7 +58,7 @@ fn a_failure_in_the_batch_is_a_failure() {
             "totalCount":1,"successCount":0}"#,
     )
     .unwrap();
-    let err = worklist::creator::check_batch(&v, "edit").unwrap_err().to_string();
+    let err = worklist::board::check_batch(&v, Op::SetSummary).unwrap_err().to_string();
     assert!(err.contains("ACC-16"), "la clave tiene que estar: {err}");
     assert!(err.contains("INVALID_INPUT"), "el motivo tambien: {err}");
 }
@@ -70,7 +71,7 @@ fn a_successful_batch_passes() {
             "totalCount":1,"successCount":1}"#,
     )
     .unwrap();
-    assert!(worklist::creator::check_batch(&v, "edit").is_ok());
+    assert!(worklist::board::check_batch(&v, Op::SetSummary).is_ok());
 }
 
 /// Un lote mixto falla, y nombra solo al que fallo: el que anduvo no se
@@ -83,7 +84,7 @@ fn a_mixed_batch_names_only_the_one_that_failed() {
             "totalCount":2,"successCount":1}"#,
     )
     .unwrap();
-    let err = worklist::creator::check_batch(&v, "edit").unwrap_err().to_string();
+    let err = worklist::board::check_batch(&v, Op::SetSummary).unwrap_err().to_string();
     assert!(err.contains("ACC-2"), "{err}");
     assert!(!err.contains("ACC-1"), "el que anduvo no es un problema: {err}");
 }
@@ -93,14 +94,14 @@ fn a_mixed_batch_names_only_the_one_that_failed() {
 #[test]
 fn an_output_without_a_batch_shape_is_not_a_failure() {
     let v: serde_json::Value = serde_json::from_str(r#"{"key":"ACC-14"}"#).unwrap();
-    assert!(worklist::creator::check_batch(&v, "create").is_ok());
+    assert!(worklist::board::check_batch(&v, Op::Create).is_ok());
 }
 
 /// Un lote vacio no falla: nada que reportar no es un fracaso.
 #[test]
 fn an_empty_batch_passes() {
     let v: serde_json::Value = serde_json::from_str(r#"{"results":[],"successCount":0}"#).unwrap();
-    assert!(worklist::creator::check_batch(&v, "edit").is_ok());
+    assert!(worklist::board::check_batch(&v, Op::SetSummary).is_ok());
 }
 
 /// El defecto de `5l`: `*` es un comodin del full-text y `refs/bilink/*`

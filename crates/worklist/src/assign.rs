@@ -4,7 +4,7 @@
 //! Corre sobre un repo bare —un hook de recepción no tiene working tree—, así
 //! que el trabajo se hace en un worktree temporal en `--detach`.
 
-use crate::creator::Creator;
+use crate::board::Board;
 use crate::provider::key_of_filename;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -121,7 +121,7 @@ pub fn assign_window(
     old: &str,
     new_rev: &str,
     base: &str,
-    creator: &dyn Creator,
+    board: &dyn Board,
     dry_run: bool,
 ) -> Result<Option<WindowResult>> {
     // Un borrado de rama llega con `new` en ceros: no hay arbol que resolver, y
@@ -194,7 +194,7 @@ pub fn assign_window(
                 continue;
             }
             let outcome =
-                creator.create_or_find(&title, item_type, &title, parent_key.as_deref())?;
+                board.create_or_find(&title, item_type, &title, parent_key.as_deref())?;
             let key = outcome.key().to_string();
             let touched = crate::rename_one(&tmp, slug, &key)?;
             assigned.push(Assigned {
@@ -218,7 +218,7 @@ pub fn assign_window(
                     crate::commit_all(&tmp, &format!("normalize: {}", a.key))?;
                     a.normalized = true;
                 }
-                creator.set_description(&a.key, &adf)?;
+                board.set_description(&a.key, &adf)?;
             }
         }
 
@@ -241,7 +241,7 @@ pub fn assign_window(
                         untranslated.push((dep, a.key.clone()));
                         continue;
                     }
-                    if creator.link_blocks(&dep, &a.key)? {
+                    if board.link_blocks(&dep, &a.key)? {
                         linked.push((dep, a.key.clone()));
                     }
                 }
@@ -253,7 +253,7 @@ pub fn assign_window(
                     .unwrap_or(false);
                 if let (Some(d), false) = (direct, is_epic) {
                     if let Some(dk) = assigned.iter().find(|x| &x.slug == d).map(|x| &x.key) {
-                        if creator.link_relates(dk, &a.key)? {
+                        if board.link_relates(dk, &a.key)? {
                             related.push((dk.clone(), a.key.clone()));
                         }
                     }
@@ -285,9 +285,9 @@ pub fn assign_window(
                     std::fs::write(&path, &canonical)?;
                     crate::commit_all(&tmp, &format!("normalize: {key}"))?;
                 }
-                creator.set_description(key, &adf)?;
+                board.set_description(key, &adf)?;
                 if let Some(title) = title_of(&canonical) {
-                    creator.set_summary(key, &title)?;
+                    board.set_summary(key, &title)?;
                 }
                 updated.push(key.clone());
             }
