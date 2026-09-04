@@ -82,7 +82,7 @@ pub fn pending_requests(repo: &Path, rev: &str) -> Result<Vec<String>> {
 /// Con `old` en ceros —una rama nueva— no hay nada que actualizar: todo lo que
 /// trae es un pedido o ya viene resuelto de otra ventana.
 pub fn changed_keys(repo: &Path, old: &str, new_rev: &str) -> Result<Vec<String>> {
-    if old == crate::check_push::ALL_ZEROS {
+    if old == crate::check_push::ALL_ZEROS || new_rev == crate::check_push::ALL_ZEROS {
         return Ok(Vec::new());
     }
     let listing = git_output(repo, &["diff", "--name-only", old, new_rev])?;
@@ -124,6 +124,11 @@ pub fn assign_window(
     creator: &dyn Creator,
     dry_run: bool,
 ) -> Result<Option<WindowResult>> {
+    // Un borrado de rama llega con `new` en ceros: no hay arbol que resolver, y
+    // borrar los issues no es de este comando. Ver la task `5j`.
+    if new_rev == crate::check_push::ALL_ZEROS {
+        return Ok(None);
+    }
     let raw = pending_requests(repo, new_rev)?;
     let changed = changed_keys(repo, old, new_rev)?;
     if raw.is_empty() && changed.is_empty() {

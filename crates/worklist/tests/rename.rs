@@ -214,3 +214,91 @@ fn a_slug_at_the_start_of_the_field_is_rewritten() {
     assert!(changed);
     assert!(out.contains("relation.depends: ACC-77"), "{out:?}");
 }
+
+// ─── el renombre llega al sprint ───────────────────────────────────────────
+//
+// Task `63`. Tres puertas y cada una alcanzaba sola: el subdirectorio no se
+// recorria, el patron de link no admitia el `../`, y `items` no estaba en la
+// lista de campos.
+
+/// El campo `items` del sprint, que la task `4x` agrego y el renombre nunca
+/// miraba.
+#[test]
+fn renaming_rewrites_the_sprint_items_field() {
+    let text = "---\ntitle: El sprint\nstatus: open\nitems: [4h, 4j, 4i]\n---\n\nplan\n";
+    let (out, changed) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    assert!(changed);
+    assert!(out.contains("items: [ACC-94, 4j, 4i]"), "{out:?}");
+}
+
+/// Y no toca al que solo se le parece: `4h` no es `4hh`.
+#[test]
+fn the_items_field_respects_word_boundaries() {
+    let text = "---\ntitle: x\nitems: [4hh, 4h]\n---\n\nplan\n";
+    let (out, _) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    assert!(out.contains("items: [4hh, ACC-94]"), "{out:?}");
+}
+
+/// Un link desde `_sprints/` lleva `../`, y el prefijo se conserva: lo que
+/// cambia es el nombre del archivo, no donde esta.
+#[test]
+fn a_link_with_dotdot_is_rewritten_keeping_the_prefix() {
+    let text = "- [`4h` El titulo](../4h.task.md)\n";
+    let (out, changed) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    assert!(changed);
+    assert_eq!(out, "- [`ACC-94` El titulo](../ACC-94.task.md)\n");
+}
+
+/// Y con mas de un nivel tambien.
+#[test]
+fn a_link_with_two_levels_keeps_them_both() {
+    let text = "ver [`4h`](../../4h.task.md)\n";
+    let (out, _) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    assert_eq!(out, "ver [`ACC-94`](../../ACC-94.task.md)\n");
+}
+
+/// Un link sin prefijo sigue saliendo sin prefijo.
+#[test]
+fn a_link_without_prefix_stays_without_it() {
+    let text = "ver [`4h`](4h.task.md)\n";
+    let (out, _) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    assert_eq!(out, "ver [`ACC-94`](ACC-94.task.md)\n");
+}
+
+/// La tercera puerta: `rename_one` tiene que **abrir el subdirectorio**.
+#[test]
+fn renaming_reaches_files_in_subdirectories() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = dir.path();
+    let g = |args: &[&str]| {
+        let st = std::process::Command::new("git").arg("-C").arg(r).args(args).status().unwrap();
+        assert!(st.success(), "git {args:?}");
+    };
+    g(&["init", "-q"]);
+    g(&["config", "user.email", "t@t"]);
+    g(&["config", "user.name", "t"]);
+    std::fs::write(
+        r.join("4h.task.md"),
+        "---\ntitle: La task\nstatus: open\n---\n\ncuerpo\n",
+    )
+    .unwrap();
+    std::fs::create_dir(r.join("_sprints")).unwrap();
+    std::fs::write(
+        r.join("_sprints/10.sprint.md"),
+        "---\ntitle: El sprint\nstatus: open\nitems: [4h]\n---\n\n- [`4h` La task](../4h.task.md)\n",
+    )
+    .unwrap();
+    g(&["add", "-A"]);
+    g(&["commit", "-qm", "seed"]);
+
+    let touched = worklist::rename_one(r, "4h", "ACC-94").unwrap();
+    assert!(
+        touched.iter().any(|t| t.contains("10.sprint.md")),
+        "el sprint tiene que estar entre los tocados: {touched:?}"
+    );
+    let sprint = std::fs::read_to_string(r.join("_sprints/10.sprint.md")).unwrap();
+    assert!(sprint.contains("items: [ACC-94]"), "{sprint}");
+    assert!(sprint.contains("](../ACC-94.task.md)"), "{sprint}");
+    assert!(sprint.contains("[`ACC-94`"), "{sprint}");
+    assert!(r.join("ACC-94.task.md").exists());
+}

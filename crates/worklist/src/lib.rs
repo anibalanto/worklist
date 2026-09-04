@@ -53,9 +53,17 @@ pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &s
     let mut out = text.to_string();
 
     // 1. destinos de link: ](old_slug.tipo.md  [...anchor u otro cierre]
-    let link_pat = format!(r"\]\({}\.{}\.md", regex::escape(old_slug), regex::escape(old_type));
+    //
+    // Con los `../` que le anteceden: desde `_sprints/` un link a un item se
+    // escribe `](../4h.task.md)`, y sin esto no matchea. Ver la task `63`.
+    let link_pat = format!(
+        r"\]\((?:\.\./)*{}\.{}\.md",
+        regex::escape(old_slug),
+        regex::escape(old_type)
+    );
     let link_re = boundary(&link_pat);
-    out = replace_boundary(&link_re, &out, &mut changed, &format!("]({new_id}.{old_type}.md"));
+    // El prefijo `../` se conserva: el archivo se movio de nombre, no de lugar.
+    out = replace_link(&link_re, &out, &mut changed, new_id, old_type);
 
     // 2. frontmatter: parent: <slug>  y  relation.<tipo>: [...] o valor suelto
     if let Some(fm_end) = frontmatter_end(&out) {
@@ -78,7 +86,10 @@ pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &s
             changed = true;
         }
 
-        let rel_re = Regex::new(r"(relation\.[a-zA-Z_]+:\s*)(\[[^\]]*\]|[^\n]+)").unwrap();
+        // Los campos de **lista** del frontmatter, en un solo lugar: agregar uno
+        // nuevo es agregarlo aca y no en tres lados. `items` es el del sprint,
+        // que la task `4x` agrego y que el renombre nunca miraba.
+        let rel_re = Regex::new(r"((?:relation\.[a-zA-Z_]+|items):\s*)(\[[^\]]*\]|[^\n]+)").unwrap();
         let slug_re = boundary(&regex::escape(old_slug));
         fm = rel_re
             .replace_all(&fm, |caps: &regex::Captures| {
@@ -284,22 +295,76 @@ pub fn commit_all(repo: &Path, msg: &str) -> Result<()> {
 
 /// Renombra un item y reescribe sus referencias en todo el repo, en un commit.
 /// Devuelve los nombres de archivo tocados (sin contar el propio renombrado).
+/// Todos los `.md` de la capa, **incluidos los de subdirectorios**.
+///
+/// Los items viven en la raiz, pero un `.sprint.md` vive en `_sprints/` y
+/// referencia items: recorrer solo la raiz lo dejaba con los slugs viejos. Y
+/// bajar no puede confundir un directorio con un item, porque en el worklist
+/// **todo directorio empieza con `_`** y un nombre asi nunca es un id.
+fn markdown_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut pila = vec![root.to_path_buf()];
+    while let Some(dir) = pila.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if p.is_dir() {
+                if name != ".git" {
+                    pila.push(p);
+                }
+            } else if p.extension().and_then(|x| x.to_str()) == Some("md") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Como `replace_boundary`, pero conservando los `../` que el match capturo:
+/// lo que cambia es el nombre del archivo, no donde esta.
+fn replace_link(
+    re: &Regex,
+    text: &str,
+    changed: &mut bool,
+    new_id: &str,
+    item_type: &str,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for m in re.find_iter(text) {
+        let matched = m.as_str();
+        let dots = matched
+            .strip_prefix("](")
+            .map(|r| r.len() - r.trim_start_matches("../").len())
+            .unwrap_or(0);
+        let prefijo = &matched[2..2 + dots];
+        let head_len = matched.len() - trailing_delim_len(matched);
+        out.push_str(&text[last..m.start()]);
+        out.push_str(&format!("]({prefijo}{new_id}.{item_type}.md"));
+        out.push_str(&matched[head_len..]);
+        last = m.end();
+        *changed = true;
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
 pub fn rename_one(repo: &Path, old_slug: &str, new_id: &str) -> Result<Vec<String>> {
     let (src, item_type) = find_file(repo, old_slug)?;
     let dst_name = format!("{new_id}.{item_type}.md");
 
     let mut touched = Vec::new();
-    for entry in std::fs::read_dir(repo)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
+    for path in markdown_files(repo) {
         let text = std::fs::read_to_string(&path)?;
         let (new_text, changed) = rewrite_references(&text, old_slug, &item_type, new_id);
         if changed {
             std::fs::write(&path, new_text)?;
-            touched.push(path.file_name().unwrap().to_string_lossy().to_string());
+            touched.push(
+                path.strip_prefix(repo).unwrap_or(&path).to_string_lossy().to_string(),
+            );
         }
     }
 

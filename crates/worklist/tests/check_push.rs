@@ -286,3 +286,16 @@ fn un_proveedor_que_no_informa_el_cuerpo_no_rechaza() {
     let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
     assert!(r.is_empty(), "sin dato no hay divergencia que afirmar");
 }
+
+/// Task `5j`: borrar una rama llega con `new` en ceros. No escribe nada en el
+/// proveedor, asi que no hay nada que verificar — y antes de esto el chequeo
+/// de contenido le pedia a git el arbol del sha nulo y **rechazaba el borrado**.
+#[test]
+fn borrar_una_rama_no_se_verifica() {
+    let (dir, tip) = seed_repo();
+    let ceros = "0".repeat(40);
+    let provider = FileProvider::new(dir.path().join("provider.json"));
+    provider.set_status("ACC-101", "in-progress").unwrap();  // divergiria, si se mirara
+    let r = check_one(dir.path(), &tip, &ceros, "refs/heads/secure/sprint/10", &provider).unwrap();
+    assert!(r.is_empty(), "un borrado no verifica nada");
+}

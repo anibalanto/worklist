@@ -82,7 +82,10 @@ pub fn check_one(
     refname: &str,
     provider: &dyn Provider,
 ) -> Result<Vec<RejectedKey>> {
-    if classify(refname) != RefClass::Secure || old == ALL_ZEROS {
+    // `old` en ceros es una rama que nace: no habia creencia previa que
+    // comparar. `new` en ceros es un **borrado**, y borrar una rama no escribe
+    // nada en el proveedor, asi que no hay nada que probar. Ver la task `5j`.
+    if classify(refname) != RefClass::Secure || old == ALL_ZEROS || new == ALL_ZEROS {
         return Ok(vec![]);
     }
 
