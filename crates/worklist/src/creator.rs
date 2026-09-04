@@ -61,32 +61,44 @@ pub trait Creator {
 
 /// El texto con el que se **busca**, que no es el titulo.
 ///
-/// `summary ~` no compara texto literal: es full-text, y su parser tiene
-/// metacaracteres. `[` y `]` lo rompen aunque vayan entre comillas —JQL no
-/// tiene como escaparlos, `\[` es ilegal— y `*` es un comodin que en
-/// `refs/bilink/*` devuelve cero resultados sobre un issue que existe.
+/// `summary ~` no compara texto literal: es full-text, con metacaracteres y con
+/// su propia tokenizacion. Se sacan **sólo los que rompen**, medidos contra
+/// Jira y no supuestos:
 ///
-/// **Escapar de a un caracter es perder la carrera**: el que falta se descubre
-/// duplicando un issue. Por eso se busca por un subconjunto seguro **por
-/// construccion** —solo alfanumericos y espacios— y la decision la toma
-/// `search` comparando el `summary` entero. La query busca de mas; la que
-/// decide es una comparacion que no pasa por ningun parser.
+/// | | |
+/// |---|---|
+/// | `[ ] ( ) { } ^ "` | la JQL no parsea |
+/// | `*` | parsea y devuelve cero sobre un issue que existe |
 ///
-/// Los acentos se conservan: son alfanumericos y el full-text **no** los
-/// normaliza — "Indice" no encuentra un issue titulado "Índice".
+/// **Y nada mas.** Guiones, puntos, barras, `_`, `:`, `#`, `?`, `+`, `&`, `|`,
+/// `!`, `~` y comillas simples estan medidos como seguros, y sacarlos rompe la
+/// **tokenizacion**: buscar `bilinker 002 file partition` no encuentra un issue
+/// titulado `bilinker-002-file-partition`, y el reintento lo duplica. Ver la
+/// task `65`.
+///
+/// La query no tiene que ser precisa —de eso se ocupa `search`, comparando el
+/// `summary` entero— sino **no fallar** y **encontrar**. Y las dos formas de
+/// equivocarse no son simetricas: un metacaracter que se cuele hace fallar la
+/// JQL y detiene el push; un caracter quitado de mas duplica en silencio.
+///
+/// Los acentos se conservan: el full-text **no** los normaliza — "Indice" no
+/// encuentra un issue titulado "Índice".
 pub fn search_text(title: &str) -> String {
+    const ROMPEN: [char; 9] = ['[', ']', '(', ')', '{', '}', '^', '"', '*'];
     let mut out = String::with_capacity(title.len());
-    let mut space = true; // arranca en true para no abrir con espacio
+    let mut space = true;
     for c in title.chars() {
-        if c.is_alphanumeric() {
+        if ROMPEN.contains(&c) || c == '\\' {
+            if !space {
+                out.push(' ');
+                space = true;
+            }
+        } else {
             out.push(c);
-            space = false;
-        } else if !space {
-            out.push(' ');
-            space = true;
+            space = c.is_whitespace();
         }
     }
-    out.trim_end().to_string()
+    out.trim().to_string()
 }
 
 pub fn jira_type(worklist_type: &str) -> Result<&'static str> {

@@ -32,7 +32,7 @@ fn corchetes_se_neutralizan_para_la_busqueda() {
     // Confirmado contra Jira real: "summary ~ \"[prueba] algo\"" no parsea,
     // aunque las comillas esten bien escapadas. `[`/`]` no tienen forma
     // valida de escaparse en JQL (`\[` es una secuencia ilegal).
-    assert_eq!(search_text("[prueba] algo"), "prueba algo");
+    assert_eq!(search_text("[prueba] algo"), "prueba  algo");
     assert!(!search_text("[prueba] algo").contains('['));
     assert!(!search_text("[prueba] algo").contains(']'));
 }
@@ -109,10 +109,11 @@ fn an_empty_batch_passes() {
 #[test]
 fn the_search_text_keeps_only_what_no_parser_can_choke_on() {
     let t = "Índice git propio y refspecs de `refs/bilink/*`";
-    assert_eq!(search_text(t), "Índice git propio y refspecs de refs bilink");
-    for c in ['*', '`', '/', '[', ']', '"', '\\', '~', '?', ':'] {
-        assert!(!search_text(t).contains(c), "quedo un {c:?}");
+    for c in ['*', '[', ']', '(', ')', '{', '}', '^', '"'] {
+        assert!(!search_text(t).contains(c), "quedo un {c:?} que rompe la JQL");
     }
+    // La barra **se conserva**: no rompe, y sacarla rompe la tokenizacion.
+    assert!(search_text(t).contains("refs/bilink"), "{}", search_text(t));
 }
 
 /// Los acentos se conservan: el full-text **no** los normaliza, asi que
@@ -125,13 +126,35 @@ fn the_search_text_keeps_the_accents() {
 
 /// Un titulo hecho solo de simbolos no deja con que buscar. Eso no puede
 /// mandarse como query, y crear a ciegas seria duplicar por otro camino.
+/// Un titulo hecho solo de metacaracteres no deja con que buscar.
 #[test]
-fn a_title_with_nothing_alphanumeric_leaves_no_query() {
-    assert_eq!(search_text("*** --- ///"), "");
+fn a_title_with_nothing_but_metacharacters_leaves_no_query() {
+    assert_eq!(search_text("*** [] {}"), "");
 }
 
 /// Y no abre ni cierra con espacio: dos separadores seguidos son uno.
+/// No abre ni cierra con espacio, y un metacaracter entre palabras las separa
+/// en vez de pegarlas.
 #[test]
 fn the_search_text_does_not_pad_with_spaces() {
-    assert_eq!(search_text("`hola`  --  `chau`"), "hola chau");
+    let t = search_text("[hola]algo[chau]");
+    assert!(!t.starts_with(' ') && !t.ends_with(' '), "{t:?}");
+    assert_eq!(t, "hola algo chau");
+}
+
+/// El defecto de `65`: el guion es parte del token, y sacarlo hace que la
+/// busqueda no encuentre un issue que existe — y el reintento lo duplica.
+#[test]
+fn the_hyphen_survives_because_it_is_part_of_the_token() {
+    let t = "Escribir `bilinker-002-file-partition`";
+    assert!(search_text(t).contains("bilinker-002-file-partition"), "{}", search_text(t));
+}
+
+/// Y los otros que se midieron como seguros contra Jira.
+#[test]
+fn the_characters_measured_as_safe_survive() {
+    for c in ['-', '.', '/', '_', ':', '#', '?', '+', '&', '|', '!', '~', '\''] {
+        let t = format!("proba{c}proba");
+        assert!(search_text(&t).contains(c), "se fue un {c:?}, que no rompe la JQL");
+    }
 }
