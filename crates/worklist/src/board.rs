@@ -7,7 +7,7 @@ use std::process::Command;
 
 /// Como se obtuvo la clave. La distincion existe porque `acli` acepta
 /// `--parent` al crear y no al editar: sobre un issue que ya existia, la
-/// jerarquia pedida no se aplico.
+/// jerarquia pedida **no viajo en la creacion** y hay que ponerla aparte.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Assignment {
     Created(String),
@@ -20,8 +20,13 @@ impl Assignment {
             Assignment::Created(k) | Assignment::Found(k) => k,
         }
     }
-    /// El padre pedido no se aplico: el issue ya existia.
-    pub fn parent_missed(&self, parent: Option<&str>) -> bool {
+    /// Si la jerarquia hay que ponerla en un segundo paso: el issue ya
+    /// existia, asi que el `--parent` de la creacion no corrio.
+    ///
+    /// **No dice que el padre falte** — eso es sobre el board, y sobre el
+    /// board no se afirma sin mirarlo. Ver `concepts/sync.md` seccion "Pero
+    /// decirlo no es afirmar sobre el board".
+    pub fn needs_parent_apart(&self, parent: Option<&str>) -> bool {
         matches!(self, Assignment::Found(_)) && parent.is_some()
     }
 }
@@ -227,14 +232,17 @@ const SPRINT_BATCH: usize = 50;
 
 /// Corre `jira-cli`, que es el transporte de lo que `acli` no puede.
 ///
-/// **De este todavia no se sabe como informa un fallo.** De `acli` si: sale
-/// con 0 y pone el fracaso en el cuerpo, y eso costo cinco descripciones
-/// rechazadas en silencio. Averiguarlo aca es leer su codigo, no empujar
-/// contra el board — ver `concepts/sync.md` seccion "Dos transportes, dos
-/// formas de mentir, una sola respuesta".
+/// **Su codigo de salida es fiel, y esta leido y no supuesto**: `main`
+/// imprime el error en `stderr` y sale con 1, `ExitIfError` hace lo mismo con
+/// cualquier error que suba, y la capa de API devuelve error ante cualquier
+/// respuesta inesperada. Es al reves que `acli`, que sale con 0 y pone el
+/// fracaso en el cuerpo.
 ///
-/// Hasta entonces el codigo de salida es lo unico que hay, y quien llama pide
-/// el efecto de vuelta donde puede pedirlo.
+/// Lo que **no** hay que leer es su `✓`: sobre un proyecto next-gen `epic add`
+/// itera issue por issue y lo imprime si al menos uno anduvo, antes de salir
+/// con 1. Y el motivo viene en el idioma de quien corre, asi que se reporta y
+/// no se matchea. Ver `concepts/sync.md` seccion "Dos transportes, dos formas
+/// de mentir, una sola respuesta".
 fn jira(op: Op, key: Option<&str>, args: &[&str]) -> Result<String> {
     let out = Command::new("jira").args(args).output().map_err(|e| {
         Failure::new(op, key, format!("no se pudo correr `jira`: {e} — jira-cli no esta instalado"))
@@ -442,22 +450,23 @@ impl Board for JiraBoard {
             .map(|s| s.to_string()))
     }
 
-    /// `jira epic add` sobre un issue que ya existe, y **se verifica el
-    /// efecto**: es la misma razon que en `link` — no confundir "lo intente"
-    /// con "esta". Devuelve `false` si ya estaba puesto.
+    /// `jira epic add` sobre un issue que ya existe. Devuelve `false` si ya
+    /// estaba puesto.
+    ///
+    /// **No verifica el efecto despues**, y eso esta medido y no supuesto: el
+    /// codigo de salida de `jira-cli` es fiel —`ExitIfError` manda el motivo a
+    /// `stderr` y sale con 1, y la capa de API devuelve error ante cualquier
+    /// respuesta inesperada—. Lo que no es fiel es su `✓`, que sobre un
+    /// proyecto next-gen se imprime aunque parte del lote haya fallado; por
+    /// eso se mira el codigo y no la salida.
+    ///
+    /// La lectura de **antes** no es una verificacion: es para no pedir lo que
+    /// ya esta, y para que quien reporta sepa como estaba.
     fn set_parent(&self, key: &str, epic: &str) -> Result<bool> {
         if self.parent_of(key)?.as_deref() == Some(epic) {
             return Ok(false);
         }
         jira(Op::SetParent, Some(key), &["epic", "add", epic, key])?;
-        if self.parent_of(key)?.as_deref() != Some(epic) {
-            return Err(Failure::new(
-                Op::SetParent,
-                Some(key),
-                format!("`epic add {epic}` no dejo la epica puesta"),
-            )
-            .into());
-        }
         Ok(true)
     }
 

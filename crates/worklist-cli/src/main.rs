@@ -174,11 +174,11 @@ fn cmd_assign_keys(project: String, base: String, stdin: bool, dry_run: bool) ->
                 None => String::new(),
             };
             println!("  {} -> {}{}{}", a.slug, a.key, refs, padre);
-            // El padre solo se puede poner al crear: sobre un issue que ya
-            // existia, la jerarquia pedida no se aplico y hay que decirlo.
-            if a.parent_missed {
+            // Ya no es un aviso: el issue existia, su epica estaba mal y se
+            // corrigio. Se informa lo que se hizo, no lo que no se pudo.
+            if a.parent_fixed {
                 println!(
-                    "  ! {}: ya existia, asi que NO quedo bajo {} — acli no acepta --parent al editar",
+                    "  · {}: ya existia y quedo bajo {}",
                     a.key,
                     a.parent.as_deref().unwrap_or("?")
                 );

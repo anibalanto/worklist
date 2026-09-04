@@ -178,10 +178,11 @@ fn the_middle_step_travels_as_a_relates_link() {
     );
 }
 
-/// Un item que el proveedor ya tenia no recibe el padre —`acli` acepta
-/// `--parent` al crear y no al editar—, y eso se reporta en vez de callarse.
+/// Un item que el proveedor ya tenia no recibe el padre en la creacion
+/// —`acli` acepta `--parent` al crear y no al editar—, asi que se pone aparte
+/// con el otro transporte. **Se arregla, no se avisa.**
 #[test]
-fn a_found_item_reports_that_its_parent_was_not_applied() {
+fn a_found_item_gets_its_parent_in_a_second_step() {
     let dir = arbol();
     let spy = Spy {
         existing: vec![("o.task.md".into(), "ACC-99".into())],
@@ -190,11 +191,32 @@ fn a_found_item_reports_that_its_parent_was_not_applied() {
     let res = resolve(&dir.path().join("repo"), &spy);
     let o = res.assigned.iter().find(|a| a.slug == "o").unwrap();
     assert_eq!(o.key, "ACC-99");
-    assert!(o.parent.is_some(), "se le pidio un padre");
-    assert!(o.parent_missed, "y hay que decir que no se aplico");
+    let epica = o.parent.clone().expect("se le pidio un padre");
+    assert!(o.parent_fixed, "y se corrigio en vez de avisar");
+    assert_eq!(
+        spy.parent_of("ACC-99").unwrap().as_deref(),
+        Some(epica.as_str()),
+        "el proveedor tiene la epica puesta"
+    );
 
     let epic = res.assigned.iter().find(|a| a.slug == "1").unwrap();
-    assert!(!epic.parent_missed, "la epica no pedia padre");
+    assert!(!epic.parent_fixed, "la epica no pedia padre");
+}
+
+/// Y si el proveedor **ya lo tenia bien**, no se toca ni se reporta: corregir
+/// algo que estaba bien es la otra forma de mentir en el reporte.
+#[test]
+fn a_parent_already_right_is_not_touched_nor_reported() {
+    let dir = arbol();
+    let spy = Spy {
+        existing: vec![("o.task.md".into(), "ACC-99".into())],
+        parents: RefCell::new(vec![("ACC-99".into(), "ACC-1".into())]),
+        ..Default::default()
+    };
+    let res = resolve(&dir.path().join("repo"), &spy);
+    let o = res.assigned.iter().find(|a| a.slug == "o").unwrap();
+    assert_eq!(o.parent.as_deref(), Some("ACC-1"), "la epica es la misma que ya tenia");
+    assert!(!o.parent_fixed, "no habia nada que corregir");
 }
 
 /// Un ciclo en los `parent` es un error del worklist, y se reporta **antes**

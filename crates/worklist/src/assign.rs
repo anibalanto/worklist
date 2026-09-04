@@ -19,9 +19,13 @@ pub struct Assigned {
     pub normalized: bool,
     /// La clave de la epica ancestro que se le pidio de `--parent`, si tenia.
     pub parent: Option<String>,
-    /// Se le pidio un padre y el issue ya existia, asi que **no se aplico**:
-    /// `acli` acepta `--parent` al crear y no al editar.
-    pub parent_missed: bool,
+    /// El issue ya existia y **su epica estaba mal, asi que se corrigio** en un
+    /// segundo paso: `acli` acepta `--parent` al crear y no al editar, y ahi
+    /// entra el otro transporte.
+    ///
+    /// `false` cubre los dos casos buenos —no habia padre que poner, o ya
+    /// estaba puesto— y ninguno de los dos es noticia.
+    pub parent_fixed: bool,
 }
 
 #[derive(Debug)]
@@ -189,20 +193,33 @@ pub fn assign_window(
                     rewritten: 0,
                     normalized: false,
                     parent: parent_key,
-                    parent_missed: false,
+                    parent_fixed: false,
                 });
                 continue;
             }
             let outcome =
                 board.create_or_find(&title, item_type, &title, parent_key.as_deref())?;
             let key = outcome.key().to_string();
+
+            // El `--parent` solo viaja en la creacion. Sobre un issue que ya
+            // existia hay que ponerlo aparte, y **ponerlo** y no avisar: el
+            // aviso decia "no quedo bajo X" sin haber mirado el board, y una
+            // corrida caida a la mitad —que crea con padre y falla despues—
+            // basta para que eso sea falso sobre 22 issues a la vez.
+            let parent_fixed = match parent_key.as_deref() {
+                Some(epic) if outcome.needs_parent_apart(parent_key.as_deref()) => {
+                    board.set_parent(&key, epic)?
+                }
+                _ => false,
+            };
+
             let touched = crate::rename_one(&tmp, slug, &key)?;
             assigned.push(Assigned {
                 slug: slug.clone(),
                 key,
                 rewritten: touched.len(),
                 normalized: false,
-                parent_missed: outcome.parent_missed(parent_key.as_deref()),
+                parent_fixed,
                 parent: parent_key,
             });
         }
