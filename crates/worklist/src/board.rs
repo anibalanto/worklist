@@ -243,6 +243,11 @@ const SPRINT_BATCH: usize = 50;
 /// con 1. Y el motivo viene en el idioma de quien corre, asi que se reporta y
 /// no se matchea. Ver `concepts/sync.md` seccion "Dos transportes, dos formas
 /// de mentir, una sola respuesta".
+///
+/// **Y los argumentos van siempre completos.** `epic add` y `sprint add`
+/// preguntan por consola lo que falte en vez de fallar, y un hook no tiene
+/// terminal donde contestar: un argumento de menos no es un error, es un
+/// proceso colgado.
 fn jira(op: Op, key: Option<&str>, args: &[&str]) -> Result<String> {
     let out = Command::new("jira").args(args).output().map_err(|e| {
         Failure::new(op, key, format!("no se pudo correr `jira`: {e} — jira-cli no esta instalado"))
