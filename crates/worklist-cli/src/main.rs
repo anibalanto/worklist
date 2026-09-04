@@ -54,8 +54,19 @@ enum Cmd {
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo del hook.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["window", "all_windows"])]
         stdin: bool,
+        /// Una ventana por su id: `--window 1`. Se puede repetir.
+        ///
+        /// **`--stdin` es para el hook; esto es para una persona.** Reconciliar
+        /// una ventana ya resuelta obligaba a imitar el protocolo del hook a
+        /// mano — un `rev-parse`, un `echo` con el sha repetido, y saber el
+        /// nombre de la ref. Ver la task `6q`.
+        #[arg(long = "window", conflicts_with = "all_windows")]
+        window: Vec<String>,
+        /// Todas las ventanas del repo, en orden numerico.
+        #[arg(long)]
+        all_windows: bool,
         #[arg(long)]
         dry_run: bool,
     },
@@ -125,8 +136,8 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::AssignKeys { project, board, base, stdin, dry_run } => {
-            cmd_assign_keys(project, board, base, stdin, dry_run)
+        Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
+            cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             let description = format!("Fuente: {source}");
@@ -150,6 +161,8 @@ fn cmd_assign_keys(
     board_id: String,
     base: String,
     stdin: bool,
+    windows: &[String],
+    all_windows: bool,
     dry_run: bool,
 ) -> Result<()> {
     // Antes de mirar el arbol: sin credencial, la mitad de abajo de la tabla
@@ -161,7 +174,11 @@ fn cmd_assign_keys(
     let repo = std::env::current_dir()?;
     let board = JiraBoard::new(project);
 
-    let lines = read_hook_lines(stdin)?;
+    let lines = if all_windows || !windows.is_empty() {
+        window_lines(windows, all_windows)?
+    } else {
+        read_hook_lines(stdin)?
+    };
     for (old, new, refname) in lines {
         if classify(&refname) != RefClass::Secure {
             continue;
@@ -231,6 +248,57 @@ fn cmd_assign_keys(
 
 fn short(sha: &str) -> &str {
     &sha[..7.min(sha.len())]
+}
+
+/// Las ventanas nombradas, como lineas del protocolo del hook.
+///
+/// **El mismo sha de los dos lados, y no es un truco**: es lo que significa
+/// "mira esta ventana, no traigo nada nuevo". Lo que las pasadas tienen que
+/// hacer no depende de que algo se haya movido en git — depende de que git y el
+/// proveedor puedan diferir. Ver `commands/assign-keys.md`.
+fn window_lines(windows: &[String], all: bool) -> Result<Vec<(String, String, String)>> {
+    let refs: Vec<String> = if all {
+        let out = Command::new("git")
+            .args(["for-each-ref", "--format=%(refname)", "refs/heads/secure/"])
+            .output()
+            .context("git for-each-ref")?;
+        if !out.status.success() {
+            anyhow::bail!("git for-each-ref fallo: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        let mut r: Vec<String> =
+            String::from_utf8(out.stdout)?.lines().map(|s| s.to_string()).collect();
+        if r.is_empty() {
+            anyhow::bail!("no hay ninguna ventana en este repo: refs/heads/secure/** esta vacio");
+        }
+        // Un listado de refs viene ordenado como texto —1, 10, 11, 2— y el que
+        // lo lee espera el otro. El orden es de la salida, no del resultado,
+        // pero una salida que no se puede seguir es una que nadie mira.
+        r.sort_by_key(|s| numero_final(s));
+        r
+    } else {
+        windows.iter().map(|w| format!("refs/heads/secure/sprint/{w}")).collect()
+    };
+
+    let mut out = Vec::new();
+    for refname in refs {
+        let sha = rev_parse(&refname)?;
+        if sha.is_empty() {
+            anyhow::bail!("la ventana {refname} no existe en este repo");
+        }
+        out.push((sha.clone(), sha, refname));
+    }
+    Ok(out)
+}
+
+/// El ultimo tramo numerico de una ref, para ordenar `sprint/2` antes que
+/// `sprint/10`. Lo que no termine en numero va al final, junto y estable.
+fn numero_final(refname: &str) -> (u64, String) {
+    refname
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|n| (n, String::new()))
+        .unwrap_or((u64::MAX, refname.to_string()))
 }
 
 fn read_hook_lines(stdin: bool) -> Result<Vec<(String, String, String)>> {
@@ -325,3 +393,45 @@ fn rev_parse(refname: &str) -> Result<String> {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::numero_final;
+
+    /// Un listado de refs viene ordenado como texto —`sprint/1`, `sprint/10`,
+    /// `sprint/11`, `sprint/2`— y el que lo lee espera 1, 2, … 16.
+    #[test]
+    fn las_ventanas_salen_en_orden_numerico() {
+        let mut refs: Vec<&str> = vec![
+            "refs/heads/secure/sprint/1",
+            "refs/heads/secure/sprint/10",
+            "refs/heads/secure/sprint/2",
+            "refs/heads/secure/sprint/16",
+        ];
+        refs.sort_by_key(|s| numero_final(s));
+        assert_eq!(
+            refs,
+            vec![
+                "refs/heads/secure/sprint/1",
+                "refs/heads/secure/sprint/2",
+                "refs/heads/secure/sprint/10",
+                "refs/heads/secure/sprint/16",
+            ]
+        );
+    }
+
+    /// Una ventana que no termina en numero —`secure/to-work`, la de `5q`— no
+    /// tiene con que ordenarse: va al final y no rompe el orden de las otras.
+    #[test]
+    fn una_ventana_sin_numero_va_al_final_sin_romper_nada() {
+        let mut refs: Vec<&str> = vec![
+            "refs/heads/secure/to-work",
+            "refs/heads/secure/sprint/2",
+            "refs/heads/secure/sprint/1",
+        ];
+        refs.sort_by_key(|s| numero_final(s));
+        assert_eq!(refs[0], "refs/heads/secure/sprint/1");
+        assert_eq!(refs[1], "refs/heads/secure/sprint/2");
+        assert_eq!(refs[2], "refs/heads/secure/to-work");
+    }
+}
