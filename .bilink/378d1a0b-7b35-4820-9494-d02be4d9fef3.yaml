@@ -6,7 +6,7 @@ endpoint:
     - agree:
       - test
       link: capture 2a9761d270193509711874cfc625c19c
-      hash: 2af1629d0375827181367c0357f685545a1304b67ce82b711ab80f86e1dd0534
+      hash: 8ba99e2d0e5c0c73b3999ce5396fb7ee3998444e85748df808cea9803dba506a
   1:
     link: capture 1fc0cd7d05cb0fe21cfde351094e9e5c
     accepted:
