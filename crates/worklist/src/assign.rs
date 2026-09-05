@@ -316,10 +316,7 @@ pub fn assign_window(
                     // El nombre del otro lado lo escribe el worklist, con la
                     // regla de siempre: nunca el id solo. Y no es la llave —
                     // esa es el `key`— asi que cambiarlo no rompe nada.
-                    let nombre = match title_of(&text) {
-                        Some(titulo) => format!("{id} {titulo}"),
-                        None => id.clone(),
-                    };
+                    let nombre = sprint_name(id, title_of(&text).as_deref());
                     let (key, created) = match sprint_key(&text) {
                         Some(k) => (k, false),
                         None => {
@@ -750,4 +747,31 @@ pub fn bootstrap(
         old_head: head,
         new_head,
     }))
+}
+
+/// Jira no acepta un nombre de sprint de 30 caracteres o mas.
+pub const SPRINT_NAME_MAX: usize = 29;
+
+/// El nombre del sprint del otro lado: `<numero> <titulo>`, recortado.
+///
+/// **Nunca el id solo**, porque el que lee es el que menos contexto tiene. Asi
+/// que lo que se recorta es el **titulo**, y se marca: un titulo cortado sin
+/// aviso se lee como un titulo raro.
+///
+/// Diez de los veintidos sprints de este repo se pasaban del limite, asi que
+/// no es un caso de borde — el mas largo mide 65.
+///
+/// **Y es deterministico**, que es lo que lo hace seguro: mientras el
+/// `.sprint.md` no tenga `key`, este nombre es con lo que se busca antes de
+/// crear. Dos corridas que produjeran nombres distintos duplicarian el sprint.
+/// Ver `concepts/sync.md` seccion "Se busca por nombre exactamente cuando no
+/// hay `key`".
+pub fn sprint_name(id: &str, title: Option<&str>) -> String {
+    let Some(title) = title else { return id.to_string() };
+    let entero = format!("{id} {title}");
+    if entero.chars().count() <= SPRINT_NAME_MAX {
+        return entero;
+    }
+    let recortado: String = entero.chars().take(SPRINT_NAME_MAX - 1).collect();
+    format!("{recortado}…")
 }

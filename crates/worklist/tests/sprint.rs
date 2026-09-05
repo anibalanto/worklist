@@ -304,3 +304,33 @@ fn el_dry_run_no_afirma_cuantos_ya_estaban() {
     assert_eq!(res.sprint.unwrap().already, None, "no se pregunto");
     assert!(spy.inside.borrow().is_empty(), "y de verdad no se pregunto");
 }
+
+/// Jira corta en 30, y diez de los veintidos sprints de este repo se pasaban.
+#[test]
+fn el_nombre_del_sprint_entra_en_el_limite_de_jira() {
+    use worklist::assign::{sprint_name, SPRINT_NAME_MAX};
+
+    let corto = sprint_name("17", Some("Los sprints en el board"));
+    assert_eq!(corto, "17 Los sprints en el board", "lo que entra no se toca");
+
+    let largo = sprint_name("12", Some("El formato: `accepted` como lista y el vecindario con captures"));
+    assert!(largo.chars().count() <= SPRINT_NAME_MAX, "{largo:?} mide {}", largo.chars().count());
+    assert!(largo.starts_with("12 "), "el numero nunca se recorta: {largo}");
+    assert!(largo.ends_with('…'), "y el corte se marca: {largo}");
+}
+
+/// Y sobre todo **es deterministico**: mientras el `.sprint.md` no tenga `key`,
+/// este nombre es con lo que se busca antes de crear. Dos corridas que
+/// produjeran nombres distintos duplicarian el sprint.
+#[test]
+fn el_nombre_recortado_es_el_mismo_todas_las_veces() {
+    use worklist::assign::sprint_name;
+    let t = Some("La migración, hasta el corte de formato");
+    assert_eq!(sprint_name("4", t), sprint_name("4", t));
+}
+
+/// Un sprint sin titulo es su numero, y el numero solo nunca se recorta.
+#[test]
+fn sin_titulo_el_nombre_es_el_numero() {
+    assert_eq!(worklist::assign::sprint_name("7", None), "7");
+}
