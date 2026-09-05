@@ -212,9 +212,9 @@ fn cmd_assign_keys(
     let board = JiraBoard::new(project);
 
     let lines = if all_windows || !windows.is_empty() {
-        window_lines(windows, all_windows)?
+        window_lines(&repo, windows, all_windows)?
     } else {
-        read_hook_lines(stdin)?
+        read_hook_lines(&repo, stdin)?
     };
     // Una vez, antes del lote: que falte el panorama es del repo, no de cada
     // ventana. Ver la task `77`.
@@ -366,9 +366,9 @@ fn cmd_bootstrap(project: String, refname: String, base: String, dry_run: bool) 
 fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, dry_run: bool) -> Result<()> {
     let repo = std::env::current_dir()?;
     let lines = if all_windows || !windows.is_empty() {
-        window_lines(windows, all_windows)?
+        window_lines(&repo, windows, all_windows)?
     } else {
-        read_hook_lines(stdin)?
+        read_hook_lines(&repo, stdin)?
     };
     if !worklist::propagate::has_panorama(&repo) {
         anyhow::bail!(
@@ -432,9 +432,15 @@ fn short(sha: &str) -> &str {
 /// "mira esta ventana, no traigo nada nuevo". Lo que las pasadas tienen que
 /// hacer no depende de que algo se haya movido en git — depende de que git y el
 /// proveedor puedan diferir. Ver `commands/assign-keys.md`.
-fn window_lines(windows: &[String], all: bool) -> Result<Vec<(String, String, String)>> {
+fn window_lines(
+    repo: &std::path::Path,
+    windows: &[String],
+    all: bool,
+) -> Result<Vec<(String, String, String)>> {
     let refs: Vec<String> = if all {
         let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
             .args(["for-each-ref", "--format=%(refname)", "refs/heads/secure/"])
             .output()
             .context("git for-each-ref")?;
@@ -444,7 +450,17 @@ fn window_lines(windows: &[String], all: bool) -> Result<Vec<(String, String, St
         let mut r: Vec<String> =
             String::from_utf8(out.stdout)?.lines().map(|s| s.to_string()).collect();
         if r.is_empty() {
-            anyhow::bail!("no hay ninguna ventana en este repo: refs/heads/secure/** esta vacio");
+            // **El error nombra donde miro.** Sin eso manda a revisar el repo
+            // equivocado, que es la unica forma de equivocarse aca: el comando
+            // corre sobre el directorio actual, y el servidor de sincronizacion
+            // es un bare aparte del clon donde se trabaja.
+            anyhow::bail!(
+                "no hay ninguna ventana en {}: refs/heads/secure/** esta vacio\n\
+                 \n\
+                 este comando corre sobre el repo del directorio actual. Si ese no es\n\
+                 el del worklist, parate en el que si lo es.",
+                repo.display()
+            );
         }
         // Un listado de refs viene ordenado como texto —1, 10, 11, 2— y el que
         // lo lee espera el otro. El orden es de la salida, no del resultado,
@@ -457,9 +473,9 @@ fn window_lines(windows: &[String], all: bool) -> Result<Vec<(String, String, St
 
     let mut out = Vec::new();
     for refname in refs {
-        let sha = rev_parse(&refname)?;
+        let sha = rev_parse(repo, &refname)?;
         if sha.is_empty() {
-            anyhow::bail!("la ventana {refname} no existe en este repo");
+            anyhow::bail!("la ventana {refname} no existe en {}", repo.display());
         }
         out.push((sha.clone(), sha, refname));
     }
@@ -477,10 +493,10 @@ fn numero_final(refname: &str) -> (u64, String) {
         .unwrap_or((u64::MAX, refname.to_string()))
 }
 
-fn read_hook_lines(stdin: bool) -> Result<Vec<(String, String, String)>> {
+fn read_hook_lines(repo: &std::path::Path, stdin: bool) -> Result<Vec<(String, String, String)>> {
     if !stdin {
-        let head = rev_parse("HEAD")?;
-        let branch = current_branch()?;
+        let head = rev_parse(repo, "HEAD")?;
+        let branch = current_branch(repo)?;
         return Ok(vec![(head.clone(), head, format!("refs/heads/{branch}"))]);
     }
     let mut out = Vec::new();
@@ -525,8 +541,8 @@ fn cmd_check_push(
         }
         out
     } else {
-        let head = rev_parse("HEAD")?;
-        let branch = current_branch()?;
+        let head = rev_parse(&repo, "HEAD")?;
+        let branch = current_branch(&repo)?;
         vec![(head.clone(), head, format!("refs/heads/{branch}"))]
     };
 
@@ -578,16 +594,18 @@ fn cmd_check_push(
     Ok(())
 }
 
-fn current_branch() -> Result<String> {
+fn current_branch(repo: &std::path::Path) -> Result<String> {
     let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .context("git rev-parse")?;
     Ok(String::from_utf8(out.stdout)?.trim().to_string())
 }
 
-fn rev_parse(refname: &str) -> Result<String> {
-    let out = Command::new("git").args(["rev-parse", refname]).output()?;
+fn rev_parse(repo: &std::path::Path, refname: &str) -> Result<String> {
+    let out = Command::new("git").arg("-C").arg(repo).args(["rev-parse", refname]).output()?;
     Ok(String::from_utf8(out.stdout)?.trim().to_string())
 }
 
