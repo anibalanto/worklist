@@ -458,6 +458,22 @@ fn cmd_check_push(
                 r.key, r.field, r.tip_status, r.live_status
             );
         }
+        // Y lo mismo contra el panorama: de `all` se corta todo, asi que un
+        // conflicto escrito ahi entra en el proximo recorte de cada ventana.
+        // Probarlo aca es lo que evita tener que anotarlo alla.
+        if let Some((sha, subject, files)) =
+            worklist::propagate::would_conflict(&repo, &refname, &new)?
+        {
+            any_rejected = true;
+            println!(
+                "reject: {} {subject} no entra al panorama — choca en {}",
+                short(&sha),
+                files.join(", ")
+            );
+            println!(
+                "        alguien mas escribio eso desde otra ventana. Regenera la tuya y volve a aplicarlo."
+            );
+        }
     }
     if any_rejected {
         std::process::exit(1);

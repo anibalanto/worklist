@@ -205,3 +205,59 @@ fn sin_el_corte_no_se_propaga_nada() {
     let e = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap_err();
     assert!(format!("{e:#}").contains("no encuentro el corte"));
 }
+
+/// El paso del `pre-receive`: probar el cherry-pick sin aplicarlo. Es lo que
+/// convierte "el conflicto se ve" en "el push se rechaza", y lo que evita
+/// tener que anotar un conflicto en el tronco.
+#[test]
+fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
+    let dir = arbol_con_cita();
+    let r = &dir.path().join("repo");
+    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+
+    let wt = dir.path().join("w");
+    run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
+    item_con(&wt, "o.task.md", Some("1"), "lo que dice la ventana");
+    run(&wt, &["commit", "-aqm", "edito o en la ventana"]);
+    run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    item_con(r, "o.task.md", Some("1"), "lo que dice el panorama");
+    run(r, &["commit", "-aqm", "edito o en el panorama"]);
+
+    let panorama = rev(r, "insecure/all");
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+    let (_, _, files) =
+        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip)
+            .unwrap()
+            .expect("el prechequeo tiene que verlo");
+    assert_eq!(files, vec!["o.task.md".to_string()]);
+    assert_eq!(rev(r, "insecure/all"), panorama, "probar no escribe");
+}
+
+/// Y no rechaza lo que si entra: dos ventanas que tocan archivos distintos no
+/// se estorban, que es el caso normal.
+#[test]
+fn el_prechequeo_deja_pasar_lo_que_entra() {
+    let dir = arbol_con_cita();
+    let r = &dir.path().join("repo");
+    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+
+    let wt = dir.path().join("w");
+    run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
+    item_con(&wt, "o.task.md", Some("1"), "lo que dice la ventana");
+    run(&wt, &["commit", "-aqm", "edito o"]);
+    run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    // El panorama avanza sobre otro archivo.
+    item_con(r, "q.task.md", Some("1"), "otra cosa, en otro archivo");
+    run(r, &["commit", "-aqm", "edito q en el panorama"]);
+
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+    assert!(worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip)
+        .unwrap()
+        .is_none());
+    // Y de hecho entra.
+    propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+    assert!(show(r, "insecure/all", "o.task.md").contains("lo que dice la ventana"));
+    assert!(show(r, "insecure/all", "q.task.md").contains("otra cosa"));
+}

@@ -162,6 +162,63 @@ pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(St
     Ok((from, commits))
 }
 
+/// Si lo que este push deja en la ventana entraria al panorama.
+///
+/// Es el paso del `pre-receive`: **prueba** el cherry-pick, no lo aplica. La
+/// misma forma que el compare-and-swap, y por la misma razon — una escritura
+/// tiene que probar que parte del estado actual, y de `all` se corta todo.
+///
+/// Se hace con `merge-tree`, que resuelve en memoria: un `pre-receive` no
+/// puede dejar un worktree ni objetos atras si despues rechaza.
+///
+/// **Los renombres no se prueban**, porque no se copian: se rehacen sobre el
+/// arbol del panorama, y ahi no hay parche que pueda no aplicar.
+///
+/// `None` si no hay nada que probar o si todo entra. `Some` nombra el primer
+/// commit que no.
+pub fn would_conflict(
+    repo: &Path,
+    refname: &str,
+    tip: &str,
+) -> Result<Option<(String, String, Vec<String>)>> {
+    if tip == crate::check_push::ALL_ZEROS {
+        return Ok(None);
+    }
+    let Some(panorama) = rev_parse(repo, PANORAMA) else { return Ok(None) };
+    let (_, commits) = pending(repo, refname, tip)?;
+
+    let mut sobre = panorama;
+    for (sha, subject) in &commits {
+        if rename_subject(subject).is_some() {
+            continue;
+        }
+        let base = format!("{sha}^");
+        let (ok, out) = try_git(
+            repo,
+            &["merge-tree", "--write-tree", &format!("--merge-base={base}"), &sobre, sha],
+        )?;
+        let tree = out.lines().next().unwrap_or_default().trim().to_string();
+        if !ok {
+            // Sin `-z`, la salida lleva el arbol, una linea en blanco, y los
+            // conflictos en `<modo> <oid> <etapa>\t<archivo>`.
+            let mut files: Vec<String> = out
+                .lines()
+                .skip(1)
+                .filter_map(|l| l.split_once('\t').map(|(_, f)| f.to_string()))
+                .collect();
+            files.sort();
+            files.dedup();
+            return Ok(Some((sha.clone(), subject.clone(), files)));
+        }
+        // El resultado se envuelve en un commit para que el siguiente parche se
+        // pruebe sobre el arbol que el anterior dejo, y no sobre el original.
+        sobre = git_output(repo, &["commit-tree", &tree, "-p", &sobre, "-m", "probando"])?
+            .trim()
+            .to_string();
+    }
+    Ok(None)
+}
+
 /// Sube al panorama lo que la ventana resolvio y el panorama todavia no tiene.
 ///
 /// `None` cuando no hay nada que subir. **Si algo no aplica, el panorama no
