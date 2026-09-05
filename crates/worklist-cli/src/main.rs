@@ -70,6 +70,20 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Le da clave del proveedor a lo que no la tiene, sobre el panorama y sin
+    /// prometer que la rama se verifique. Es el camino del backlog.
+    Bootstrap {
+        #[arg(long)]
+        project: String,
+        /// Sobre que rama. Por defecto el panorama, que es donde vive todo.
+        #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
+        refname: String,
+        /// Base del proveedor, para traducir los links a otros items.
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Sube al panorama lo que una ventana resolvio. Corre al final del
     /// `post-receive`, y a mano para reintentar lo que no subio.
     Propagate {
@@ -154,6 +168,9 @@ fn main() -> Result<()> {
         }
         Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
             cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
+        }
+        Cmd::Bootstrap { project, refname, base, dry_run } => {
+            cmd_bootstrap(project, refname, base, dry_run)
         }
         Cmd::Propagate { stdin, window, all_windows, dry_run } => {
             cmd_propagate(stdin, &window, all_windows, dry_run)
@@ -272,6 +289,43 @@ fn cmd_assign_keys(
             Ok(None) => {}
             Err(e) => println!("  ! el panorama no avanzo: {e}"),
         }
+    }
+    Ok(())
+}
+
+/// El bootstrap del panorama: clave para lo que no la tiene.
+///
+/// **No propaga ni verifica.** Escribe en el panorama porque el que escribe es
+/// el servidor, que es lo mismo que ya hace la propagacion — `insecure/**`
+/// rechaza al cliente, no al servidor.
+fn cmd_bootstrap(project: String, refname: String, base: String, dry_run: bool) -> Result<()> {
+    if !dry_run {
+        worklist::port::preflight()?;
+    }
+    let repo = std::env::current_dir()?;
+    let board = JiraBoard::new(project);
+    let Some(r) = worklist::assign::bootstrap(&repo, &refname, &base, &board, dry_run)? else {
+        println!("{refname}: no hay ningun item sin clave");
+        return Ok(());
+    };
+    let verbo = if dry_run { "pediria clave para" } else { "resolvio" };
+    println!("{}: {verbo} {} item(s)", r.refname, r.assigned.len());
+    for a in &r.assigned {
+        let refs = match a.rewritten {
+            0 => String::new(),
+            n => format!("  ({n} refs reescritas)"),
+        };
+        let padre = match &a.parent {
+            Some(p) => format!("  [parent {p}]"),
+            None => String::new(),
+        };
+        // Encontrado no es creado, y la diferencia se ve: sobre lo encontrado
+        // el cuerpo no viaja, porque no hay con que probar que no se pisa.
+        let como = if a.created { "" } else { "  (ya existia: el cuerpo no se toco)" };
+        println!("  {} -> {}{}{}{}", a.slug, a.key, refs, padre, como);
+    }
+    if !dry_run && r.new_head != r.old_head {
+        println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
     }
     Ok(())
 }

@@ -17,6 +17,10 @@ pub struct Assigned {
     pub rewritten: usize,
     /// El round-trip cambio el archivo: quedo un commit `normalize:` propio.
     pub normalized: bool,
+    /// El issue lo creo esta corrida. `false` es *"ya existia y lo encontre"*,
+    /// y la diferencia importa donde no hay compare-and-swap detras: sobre
+    /// algo que ya estaba, escribir sin haber mirado es pisar.
+    pub created: bool,
     /// La clave de la epica ancestro que se le pidio de `--parent`, si tenia.
     pub parent: Option<String>,
     /// El issue ya existia y **su epica estaba mal, asi que se corrigio** en un
@@ -196,59 +200,8 @@ pub fn assign_window(
         // ── Pasada 1: claves y renombres. Nada viaja al proveedor todavia:
         // un cuerpo enviado aca llevaria los nombres previos al renombre de
         // los demas del lote, y quedaria congelado asi.
-        let mut assigned = Vec::new();
-        for slug in &order {
-            let item_type = &types[slug];
-            let (path, _) = crate::find_file(&tmp, slug)?;
-            let text = std::fs::read_to_string(&path)?;
-            let title = title_of(&text).unwrap_or_else(|| slug.clone());
-
-            // La epica ya tiene clave: el orden topologico la pone antes.
-            let epic_slug = epic_ancestor(slug, &parents, &types);
-            let parent_key = epic_slug.as_ref().and_then(|e| {
-                assigned
-                    .iter()
-                    .find(|a: &&Assigned| &a.slug == e)
-                    .map(|a| a.key.clone())
-            });
-
-            if dry_run {
-                assigned.push(Assigned {
-                    slug: slug.clone(),
-                    key: "(dry-run)".into(),
-                    rewritten: 0,
-                    normalized: false,
-                    parent: parent_key,
-                    parent_fixed: false,
-                });
-                continue;
-            }
-            let outcome =
-                board.create_or_find(&title, item_type, &title, parent_key.as_deref())?;
-            let key = outcome.key().to_string();
-
-            // El `--parent` solo viaja en la creacion. Sobre un issue que ya
-            // existia hay que ponerlo aparte, y **ponerlo** y no avisar: el
-            // aviso decia "no quedo bajo X" sin haber mirado el board, y una
-            // corrida caida a la mitad —que crea con padre y falla despues—
-            // basta para que eso sea falso sobre 22 issues a la vez.
-            let parent_fixed = match parent_key.as_deref() {
-                Some(epic) if outcome.needs_parent_apart(parent_key.as_deref()) => {
-                    board.set_parent(&key, epic)?
-                }
-                _ => false,
-            };
-
-            let touched = crate::rename_one(&tmp, slug, &key)?;
-            assigned.push(Assigned {
-                slug: slug.clone(),
-                key,
-                rewritten: touched.len(),
-                normalized: false,
-                parent_fixed,
-                parent: parent_key,
-            });
-        }
+        let assigned = assign_and_rename(&tmp, &order, &types, &parents, board, dry_run)?;
+        let mut assigned = assigned;
 
         // ── Pasada 2: los cuerpos, ya con todos los nombres finales puestos.
         if !dry_run {
@@ -580,4 +533,164 @@ pub(crate) fn title_of(text: &str) -> Option<String> {
     let raw = re.captures(text)?[1].trim().to_string();
     // El frontmatter puede citar el titulo si lleva `:` u otros caracteres.
     Some(raw.trim_matches(|c| c == '\'' || c == '"').to_string())
+}
+
+/// **Pasada 1**: por cada pedido, su clave del proveedor y su renombre.
+///
+/// La comparten [`assign_window`] y [`bootstrap`], que son la misma operacion
+/// sobre dos conjuntos distintos: los pedidos de una ventana, y los del
+/// panorama entero. Ver `concepts/sync.md`.
+fn assign_and_rename(
+    tmp: &Path,
+    order: &[String],
+    types: &HashMap<String, String>,
+    parents: &HashMap<String, String>,
+    board: &dyn Board,
+    dry_run: bool,
+) -> Result<Vec<Assigned>> {
+    let mut assigned: Vec<Assigned> = Vec::new();
+    for slug in order {
+        let item_type = &types[slug];
+        let (path, _) = crate::find_file(tmp, slug)?;
+        let text = std::fs::read_to_string(&path)?;
+        let title = title_of(&text).unwrap_or_else(|| slug.clone());
+
+        // La epica ya tiene clave: el orden topologico la pone antes.
+        let epic_slug = epic_ancestor(slug, parents, types);
+        let parent_key = epic_slug
+            .as_ref()
+            .and_then(|e| assigned.iter().find(|a: &&Assigned| &a.slug == e).map(|a| a.key.clone()));
+
+        if dry_run {
+            assigned.push(Assigned {
+                slug: slug.clone(),
+                key: "(dry-run)".into(),
+                rewritten: 0,
+                normalized: false,
+                created: false,
+                parent: parent_key,
+                parent_fixed: false,
+            });
+            continue;
+        }
+        let outcome = board.create_or_find(&title, item_type, &title, parent_key.as_deref())?;
+        let key = outcome.key().to_string();
+        let created = matches!(outcome, crate::board::Assignment::Created(_));
+
+        // El `--parent` solo viaja en la creacion. Sobre un issue que ya
+        // existia hay que ponerlo aparte, y **ponerlo** y no avisar: el aviso
+        // decia "no quedo bajo X" sin haber mirado el board.
+        let parent_fixed = match parent_key.as_deref() {
+            Some(epic) if outcome.needs_parent_apart(parent_key.as_deref()) => {
+                board.set_parent(&key, epic)?
+            }
+            _ => false,
+        };
+
+        let touched = crate::rename_one(tmp, slug, &key)?;
+        assigned.push(Assigned {
+            slug: slug.clone(),
+            key,
+            rewritten: touched.len(),
+            normalized: false,
+            created,
+            parent_fixed,
+            parent: parent_key,
+        });
+    }
+    Ok(assigned)
+}
+
+/// Lo que el bootstrap hizo sobre el panorama.
+#[derive(Debug)]
+pub struct BootstrapResult {
+    pub refname: String,
+    pub order: Vec<String>,
+    pub assigned: Vec<Assigned>,
+    pub old_head: String,
+    pub new_head: String,
+}
+
+/// **El bootstrap**: darle clave del proveedor a lo que no la tiene, sin
+/// prometer que la rama se verifique.
+///
+/// Es la separacion que pide la task `5n`: *tener clave* es del item y pasa una
+/// vez; *verificarse entera* es de la rama y se paga en cada push. El panorama
+/// puede tener lo primero sin prometer lo segundo — que es exactamente lo que
+/// "insegura" significa.
+///
+/// **Corre en el servidor, sobre el panorama, y no es un push.** `insecure/**`
+/// rechaza escrituras del cliente; que el servidor escriba ahi es lo que ya
+/// hace la propagacion. Ver `concepts/propagation.md`.
+///
+/// De las cinco pasadas hace **solo la primera**, y una parte de la segunda:
+/// el cuerpo viaja unicamente donde el issue se **creo**. Sobre uno que ya
+/// existia no hay compare-and-swap detras que pruebe que partimos del estado
+/// actual, y escribir sin eso es pisar lo que alguien haya editado en el board.
+pub fn bootstrap(
+    repo: &Path,
+    refname: &str,
+    base: &str,
+    board: &dyn Board,
+    dry_run: bool,
+) -> Result<Option<BootstrapResult>> {
+    let head = git_output(repo, &["rev-parse", refname])?.trim().to_string();
+    let raw = pending_requests(repo, &head)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let slugs: Vec<String> =
+        raw.iter().map(|s| s.split('\t').next().unwrap().to_string()).collect();
+    let types: HashMap<String, String> = raw
+        .iter()
+        .map(|s| {
+            let mut p = s.split('\t');
+            (p.next().unwrap().to_string(), p.next().unwrap().to_string())
+        })
+        .collect();
+
+    let tmp = tempdir_path(repo, &format!("bootstrap-{refname}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), &head])?;
+
+    let result = (|| -> Result<(Vec<String>, Vec<Assigned>, String)> {
+        let order = crate::topo_order(&tmp, &slugs)?;
+        let mut parents: HashMap<String, String> = HashMap::new();
+        for slug in &slugs {
+            let (path, _) = crate::find_file(&tmp, slug)?;
+            if let Some(p) = parent_of(&std::fs::read_to_string(&path)?) {
+                parents.insert(slug.clone(), p);
+            }
+        }
+        let mut assigned = assign_and_rename(&tmp, &order, &types, &parents, board, dry_run)?;
+        if !dry_run {
+            for a in assigned.iter_mut().filter(|a| a.created) {
+                let (path, _) = crate::find_file(&tmp, &a.key)?;
+                let text = std::fs::read_to_string(&path)?;
+                let (adf, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                if canonical != text {
+                    std::fs::write(&path, &canonical)?;
+                    crate::commit_all(&tmp, &format!("normalize: {}", a.key))?;
+                    a.normalized = true;
+                }
+                board.set_description(&a.key, &adf)?;
+            }
+        }
+        let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
+        Ok((order, assigned, new_head))
+    })();
+
+    let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    let (order, assigned, new_head) = result?;
+
+    if !dry_run && new_head != head {
+        git_output(repo, &["update-ref", refname, &new_head, &head])?;
+    }
+    Ok(Some(BootstrapResult {
+        refname: refname.to_string(),
+        order,
+        assigned,
+        old_head: head,
+        new_head,
+    }))
 }

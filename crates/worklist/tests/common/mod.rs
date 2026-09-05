@@ -208,3 +208,16 @@ pub fn show(repo: &Path, rev: &str, file: &str) -> String {
     assert!(out.status.success(), "git show {rev}:{file}");
     String::from_utf8(out.stdout).unwrap()
 }
+
+/// Los archivos que un rev tiene, uno por linea y con un `\n` adelante para
+/// poder preguntar por un nombre completo sin que un sufijo lo confunda.
+pub fn show_tree(repo: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-tree", "-r", "--name-only", rev])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git ls-tree {rev}");
+    format!("\n{}", String::from_utf8(out.stdout).unwrap())
+}
