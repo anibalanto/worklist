@@ -156,6 +156,16 @@ fn would_discard(repo: &Path, branch: &str, head: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Lo que la ventana tiene **encima de su corte**: su trabajo, sin el recorte.
+fn work_above_cut(repo: &Path, branch: &str, from: &str) -> Result<Option<(String, Vec<String>)>> {
+    if git_output(repo, &["rev-parse", "--verify", "--quiet", branch]).is_err() {
+        return Ok(None);
+    }
+    let cut = crate::propagate::cut_commit(repo, branch, from)?;
+    let work = git_output(repo, &["log", "--oneline", &format!("{cut}..{branch}")])?;
+    Ok(Some((cut, work.lines().map(|l| l.to_string()).collect())))
+}
+
 pub fn open(
     repo: &Path,
     sprint_id: &str,
@@ -169,6 +179,26 @@ pub fn open(
     }
 
     let branch = format!("refs/heads/secure/sprint/{sprint_id}");
+
+    // Antes de escribir nada: mover una rama con worktree activo deja el indice
+    // desincronizado, y el sintoma no dice la causa — archivos "modificados"
+    // que nadie toco. Ni con `--force`: forzar autoriza a descartar commits a
+    // sabiendas, no a dejar un checkout inconsistente.
+    if let Some(wt) = checked_out_at(repo, &branch) {
+        bail!(
+            "secure/sprint/{sprint_id} esta checkouteada en un worktree y no se puede mover:\n\
+             \x20 {wt}\n\
+             \n\
+             moverla dejaria ese worktree con el indice del arbol anterior. Saca el\n\
+             worktree primero."
+        );
+    }
+    // Lo que la ventana tiene encima de su corte: **eso se replanta**, no se
+    // descarta. El corte viejo no: es un commit que borra una lista fija de
+    // rutas, y re-aplicarlo sobre un panorama que crecio no menciona lo nuevo,
+    // asi que lo nuevo entra. Ver `concepts/propagation.md`.
+    let previo = if force { None } else { work_above_cut(repo, &branch, from)? };
+
     let tmp = repo.join(format!("../.worklist-window-{sprint_id}"));
     let _ = std::fs::remove_dir_all(&tmp);
     git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), from])?;
@@ -183,45 +213,61 @@ pub fn open(
             }
         }
         crate::commit_all(&tmp, &format!("window: sprint/{sprint_id} recortado desde {from}"))?;
+        let corte = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
+
+        // El replante. En el caso sano queda vacio solo, por patch-id: lo que
+        // la ventana hizo ya subio al panorama, asi que el corte nuevo lo
+        // contiene y git lo deja caer. Nadie tiene que acordarse de propagar
+        // antes de regenerar.
+        let Some((cut, work)) = previo else { return Ok(corte) };
+        if work.is_empty() {
+            return Ok(corte);
+        }
+        // De a un commit y no con `rebase --onto`: el descarte por patch-id de
+        // `rebase` compara contra el corte **viejo**, y lo que ya subio vive en
+        // el panorama, que es ancestro del corte **nuevo**. El cherry-pick
+        // pregunta contra el arbol que tiene delante, que es lo que importa.
+        let shas = git_output(repo, &["rev-list", "--reverse", &format!("{cut}..{branch}")])?;
+        for sha in shas.lines() {
+            match crate::propagate::cherry_pick_one(&tmp, sha)? {
+                crate::propagate::Picked::Applied | crate::propagate::Picked::Empty => {}
+                crate::propagate::Picked::Conflict { files, output } => bail!(
+                    "el corte nuevo esta, pero un commit de la ventana no se pudo replantar:\n\
+                     \x20 {linea}\n\
+                     \x20 choca en: {files}\n\
+                     \n\
+                     pasa cuando el trabajo toca un item que el `items` de hoy ya no lleva.\n\
+                     Para tirarlo a sabiendas: --force\n\
+                     \n{output}",
+                    linea = work
+                        .iter()
+                        .find(|l| l.starts_with(&sha[..7.min(sha.len())]))
+                        .cloned()
+                        .unwrap_or_else(|| sha.to_string()),
+                    files = files.join(", "),
+                    output = output.trim(),
+                ),
+            }
+        }
         Ok(git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
     })();
 
     let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
     let head = result?;
 
-    // **Abrir es una vez.** Una ventana que ya vivio tiene encima lo que el
-    // servidor escribio —los `rename` y los `normalize:`— y eso no esta en el
-    // panorama, porque las claves quedan en la rama de cada ventana. Recortar
-    // de nuevo no actualiza: reemplaza, y se lleva eso puesto, mas lo que
-    // alguien haya editado adentro. Ver `commands/window-open.md`.
-    // Mover una rama con worktree activo deja el indice desincronizado, y el
-    // sintoma no dice la causa: archivos "modificados" que nadie toco.
-    if let Some(wt) = checked_out_at(repo, &branch) {
-        bail!(
-            "secure/sprint/{sprint_id} esta checkouteada en un worktree y no se puede mover:\n\
-             \x20 {wt}\n\
-             \n\
-             moverla dejaria ese worktree con el indice del arbol anterior. Saca el\n\
-             worktree primero, o traelo con un merge en vez de recortar."
-        );
-    }
-
-    let discarded = would_discard(repo, &branch, &head);
-    if !discarded.is_empty() && !force {
-        let muestra: Vec<&String> = discarded.iter().take(3).collect();
-        let resto = discarded.len().saturating_sub(muestra.len());
-        let mas = if resto > 0 { format!("\n  … y {resto} mas") } else { String::new() };
-        let lineas = muestra.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ");
-        bail!(
-            "secure/sprint/{sprint_id} ya existe y tiene {n} commit(s) que este corte no contiene\n\
-\x20 {lineas}{mas}\n\
-\n\
-recortar de nuevo los descarta. Para traer lo del servidor:\n\
-\x20   git fetch <remoto> && git merge --ff-only <remoto>/secure/sprint/{sprint_id}\n\
-\n\
-Para descartarlos igual: --force",
-            n = discarded.len(),
-        );
+    // Con `--force` el replante no corrio: lo que la ventana tenia encima se
+    // tira, y se dice cuanto. Es una decision explicita, no un efecto.
+    if force {
+        let descartado = would_discard(repo, &branch, &head);
+        if !descartado.is_empty() {
+            eprintln!(
+                "--force: {} commit(s) de la ventana quedan afuera del corte nuevo",
+                descartado.len()
+            );
+            for l in descartado.iter().take(3) {
+                eprintln!("  {l}");
+            }
+        }
     }
 
     git_output(repo, &["update-ref", &branch, &head])?;

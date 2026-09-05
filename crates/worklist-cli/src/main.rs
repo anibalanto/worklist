@@ -108,7 +108,8 @@ enum WindowCmd {
         from: String,
         #[arg(long)]
         dry_run: bool,
-        /// Recorta aunque la rama ya exista con commits propios, descartandolos.
+        /// No replanta: el corte nuevo reemplaza a la ventana, descartando
+        /// lo que tenia encima. Ver `commands/window-open.md`.
         #[arg(long)]
         force: bool,
     },

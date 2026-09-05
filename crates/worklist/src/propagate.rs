@@ -99,10 +99,12 @@ fn rename_subject(subject: &str) -> Option<(String, String)> {
 
 /// El commit del corte: el primero que la ventana tiene sobre el panorama.
 ///
-/// Todo lo que esta **encima** es trabajo de la ventana y sube; el corte no,
-/// porque es un commit que borra los items que el recorte dejo afuera.
-fn cut_commit(repo: &Path, tip: &str) -> Result<String> {
-    let base = git_output(repo, &["merge-base", PANORAMA, tip])?.trim().to_string();
+/// Todo lo que esta **encima** es trabajo de la ventana; el corte no, porque es
+/// un commit que borra los items que el recorte dejo afuera. Lo usan las dos
+/// direcciones: subir arranca despues del corte, y regenerar lo reemplaza por
+/// uno nuevo y replanta lo que estaba encima.
+pub fn cut_commit(repo: &Path, tip: &str, base_ref: &str) -> Result<String> {
+    let base = git_output(repo, &["merge-base", base_ref, tip])?.trim().to_string();
     let log = git_output(repo, &["log", "--reverse", "--format=%H%x09%s", &format!("{base}..{tip}")])?;
     let first = log.lines().next().unwrap_or_default();
     let (sha, subject) = first.split_once('\t').unwrap_or((first, ""));
@@ -119,11 +121,38 @@ fn cut_commit(repo: &Path, tip: &str) -> Result<String> {
     Ok(sha.to_string())
 }
 
+/// Que paso al re-aplicar un commit sobre el HEAD de un worktree.
+pub(crate) enum Picked {
+    Applied,
+    /// El arbol ya lo tenia: la re-aplicacion no aporta nada.
+    Empty,
+    Conflict { files: Vec<String>, output: String },
+}
+
+/// Cherry-pick de un commit, distinguiendo *no aporta nada* de *choca*.
+///
+/// La diferencia se lee del indice y no del codigo de salida: git falla en los
+/// dos casos. Si no quedo nada en conflicto, el commit ya estaba aplicado.
+pub(crate) fn cherry_pick_one(tmp: &Path, sha: &str) -> Result<Picked> {
+    let (ok, output) = try_git(tmp, &["cherry-pick", "--allow-empty", sha])?;
+    if ok {
+        return Ok(Picked::Applied);
+    }
+    let unmerged = git_output(tmp, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+    if unmerged.trim().is_empty() {
+        let _ = try_git(tmp, &["cherry-pick", "--skip"]);
+        return Ok(Picked::Empty);
+    }
+    let files = unmerged.lines().map(|s| s.to_string()).collect();
+    let _ = try_git(tmp, &["cherry-pick", "--abort"]);
+    Ok(Picked::Conflict { files, output })
+}
+
 /// Los commits que faltan subir, en orden, con su asunto.
 pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(String, String)>)> {
     let from = match rev_parse(repo, &propagated_ref(refname)) {
         Some(sha) => sha,
-        None => cut_commit(repo, tip)?,
+        None => cut_commit(repo, tip, PANORAMA)?,
     };
     let log = git_output(repo, &["log", "--reverse", "--format=%H%x09%s", &format!("{from}..{tip}")])?;
     let commits = log
@@ -188,25 +217,14 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, dry_run: bool) -> Result
                     }
                     Err(_) => steps.push(Step::AlreadyRenamed { slug, key }),
                 },
-                None => {
-                    let (ok, out) = try_git(&tmp, &["cherry-pick", "--allow-empty", sha])?;
-                    if ok {
-                        steps.push(Step::Picked { sha: sha.clone(), subject: subject.clone() });
-                        continue;
+                None => match cherry_pick_one(&tmp, sha)? {
+                    Picked::Applied => {
+                        steps.push(Step::Picked { sha: sha.clone(), subject: subject.clone() })
                     }
-                    // Un commit que el panorama ya tiene por otra via deja el
-                    // indice limpio y sin nada en conflicto: no es un choque,
-                    // es que no queda nada que aplicar.
-                    let unmerged = git_output(&tmp, &["diff", "--name-only", "--diff-filter=U"])
-                        .unwrap_or_default();
-                    if unmerged.trim().is_empty() {
-                        let _ = try_git(&tmp, &["cherry-pick", "--skip"]);
-                        steps.push(Step::Empty { sha: sha.clone(), subject: subject.clone() });
-                        continue;
+                    Picked::Empty => {
+                        steps.push(Step::Empty { sha: sha.clone(), subject: subject.clone() })
                     }
-                    let files: Vec<&str> = unmerged.lines().collect();
-                    let _ = try_git(&tmp, &["cherry-pick", "--abort"]);
-                    bail!(
+                    Picked::Conflict { files, output } => bail!(
                         "el panorama no recibe {} {subject}\n\
                          \x20 choca en: {}\n\
                          \n\
@@ -216,9 +234,9 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, dry_run: bool) -> Result
                          \n{}",
                         &sha[..7.min(sha.len())],
                         files.join(", "),
-                        out.trim()
-                    );
-                }
+                        output.trim()
+                    ),
+                },
             }
         }
         Ok(steps)

@@ -183,33 +183,134 @@ fn open_deja_en_la_rama_solo_esos_archivos() {
     assert!(!en_la_rama.contains(&"ACC-7.task.md".to_string()));
 }
 
-/// El defecto de `5o`: `open` hacia `update-ref` incondicional, asi que
-/// recortar sobre una ventana viva se llevaba puesto lo que el servidor habia
-/// escrito encima —los `rename` y los `normalize:`— y lo que alguien hubiera
-/// editado adentro.
+/// El defecto de `5o` era que `open` hacia `update-ref` incondicional y se
+/// llevaba puesto lo que el servidor habia escrito encima. La salida no es
+/// negarse: es **replantar**, que es lo que `64` decidio. El corte se
+/// recalcula contra el `items` de hoy, y lo que estaba encima se re-aplica.
 #[test]
-fn opening_a_window_that_already_lived_refuses_instead_of_discarding() {
+fn recortar_de_nuevo_replanta_lo_que_estaba_encima() {
     let (_dir, r) = arbol_aislado();
     worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
     let head_servidor = el_servidor_escribe_encima(&r, "10", "normalize: ACC-1");
 
-    let err = worklist::window::open(&r, "10", "insecure/all", false, false)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("ya existe"), "tiene que decir por que no: {err}");
-    assert!(err.contains("normalize: ACC-1"), "y cual commit se perderia: {err}");
-    assert!(err.contains("--force"), "y como forzarlo si de verdad se quiere: {err}");
+    let (_, head) = worklist::window::open(&r, "10", "insecure/all", false, false)
+        .expect("regenerar no descarta: replanta");
 
+    let _ = head_servidor;
+    assert_eq!(head_de(&r, "refs/heads/secure/sprint/10"), head);
+    let log = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["log", "--format=%s", "refs/heads/secure/sprint/10"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(log.contains("normalize: ACC-1"), "el trabajo de la ventana sobrevive: {log}");
     assert_eq!(
-        head_de(&r, "refs/heads/secure/sprint/10"),
-        head_servidor,
-        "un error no puede dejar la rama movida"
+        log.matches("window: sprint/10").count(),
+        1,
+        "el corte se reemplaza, no se apila: {log}"
+    );
+    assert!(
+        log.lines().next() == Some("normalize: ACC-1"),
+        "y queda encima del corte, que es donde vive el trabajo: {log}"
     );
 }
 
-/// Con `--force` si recorta: es el caso del `items` que cambio, y es explicito.
+/// Lo que separa **regenerar** de rebasear el corte, y es la razon de todo
+/// esto: re-aplicar el commit del corte no menciona lo que el panorama gano
+/// despues, asi que lo nuevo entra. Recalcularlo no.
 #[test]
-fn force_recuts_the_window_on_purpose() {
+fn regenerar_no_ensancha_la_ventana_con_lo_que_el_panorama_gano() {
+    let (_dir, r) = arbol_aislado();
+    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    el_servidor_escribe_encima(&r, "10", "trabajo adentro");
+
+    // El panorama gana un item que no es de esta ventana.
+    let wt = r.join("pan");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "insecure/all"]);
+    item(&wt, "ACC-77.task.md", None);
+    run(&wt, &["add", "-A"]);
+    run(&wt, &["commit", "-qm", "un item ajeno"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let en_la_rama = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["ls-tree", "-r", "--name-only", "refs/heads/secure/sprint/10"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(!en_la_rama.contains("ACC-77"), "lo ajeno no entra por la puerta de atras");
+    assert!(en_la_rama.contains("ACC-2.user-story.md"), "y lo suyo sigue: {en_la_rama}");
+}
+
+/// Y el descarte deja de ser una promesa: si el trabajo ya subio al panorama,
+/// el replante queda vacio **solo**, por patch-id. Nadie tiene que acordarse
+/// de propagar antes de regenerar.
+#[test]
+fn el_replante_queda_vacio_si_el_trabajo_ya_subio() {
+    let (_dir, r) = arbol_aislado();
+    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let wt = r.join("w");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
+    item(&wt, "ACC-3.task.md", Some("ACC-2"));
+    std::fs::write(wt.join("ACC-3.task.md"), "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: ACC-2\n---\n\neditado\n").unwrap();
+    run(&wt, &["commit", "-aqm", "edito ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    let tip = head_de(&r, "refs/heads/secure/sprint/10");
+    worklist::propagate::propagate(&r, "refs/heads/secure/sprint/10", &tip, false)
+        .unwrap()
+        .unwrap();
+
+    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let log = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["log", "--format=%s", "refs/heads/secure/sprint/10"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    // El commit sigue nombrado en el log, y **por el panorama**: la
+    // propagacion lo cherry-pickeo alla, y el corte nuevo sale de ahi. Lo que
+    // no queda es una copia **encima** del corte.
+    assert_eq!(
+        log.lines().next(),
+        Some("window: sprint/10 recortado desde insecure/all"),
+        "el replante quedo vacio solo: {log}"
+    );
+    let contenido = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["show", "refs/heads/secure/sprint/10:ACC-3.task.md"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(contenido.contains("editado"), "y sin embargo el trabajo esta: {contenido}");
+}
+
+/// `--force` baja de categoria: ya no es el flujo del `items` que cambio —eso
+/// es regenerar y ya— sino tirar lo local a sabiendas cuando el replante no
+/// entra.
+#[test]
+fn force_tira_lo_de_la_ventana_a_sabiendas() {
     let (_dir, r) = arbol_aislado();
     worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
     let head_servidor = el_servidor_escribe_encima(&r, "10", "encima");
@@ -228,8 +329,7 @@ fn opening_a_fresh_window_is_not_blocked() {
     assert!(!head.is_empty());
 }
 
-/// Y re-cortar **sin** que el servidor haya escrito nada tampoco molesta: lo
-/// que la guarda mira es si hay commits que se perderian, no si la rama existe.
+/// Re-cortar sin que nadie haya escrito encima no tiene nada que replantar.
 #[test]
 fn recutting_an_untouched_window_is_not_blocked() {
     let (_dir, r) = arbol_aislado();
