@@ -2,13 +2,18 @@ kind: governs
 endpoint:
   0:
     link: path <
-  1:
-    link: capture 3fc3224306f71c430537174e17dbbacb
     accepted:
     - agree:
       - test
-      link: capture 3fc3224306f71c430537174e17dbbacb
-      hash: 66740c04a5c8546ae5013ad219a5c429f5fee856c1b94010da6fa6d8b72edd9e
-      hash_ast: 726e466ebaef27a4518c8c83991d48f02a43b06246daaa57dd6b5b291ca9cd7b
+      link: capture a9449567fc35e56166838874c9af8fd1
+      hash: 0197417bead60b00a613523d594096468ed1b792613595b8489c5c4ed989102c
+  1:
+    link: capture 7f619e14adf389cbfa36abb8ee778283
+    accepted:
+    - agree:
+      - test
+      link: capture 7f619e14adf389cbfa36abb8ee778283
+      hash: f4f4028d7119ce9b9786dfb05f507249c9191f370dd546318a35c7012505a8d7
+      hash_ast: b91652e7c1094e76f145a63a798474555873277e466c9cf32e8efd3049893d43
       n: declined
     name: CreateOrFind-arm
