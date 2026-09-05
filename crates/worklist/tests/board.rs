@@ -159,3 +159,27 @@ fn the_characters_measured_as_safe_survive() {
         assert!(search_text(&t).contains(c), "se fue un {c:?}, que no rompe la JQL");
     }
 }
+
+/// Un board sin ningun sprint es el estado del que se parte, y `jira-cli` lo
+/// reporta como fracaso: `✗ No result found for given query` y sale con 1.
+/// Tratarlo como error vuelve **imposible la primera corrida** sobre cualquier
+/// board.
+#[test]
+fn un_listado_vacio_no_es_un_fracaso() {
+    use worklist::board::listing_survives;
+
+    assert!(listing_survives(true, "6512\tSprint 1\n"), "anduvo y trajo filas");
+    assert!(listing_survives(true, ""), "anduvo y no habia nada");
+    assert!(listing_survives(false, ""), "fallo sin filas: no hay nada que leer");
+    assert!(listing_survives(false, "   \n"), "y en blanco es lo mismo que vacio");
+}
+
+/// Y no al reves: un fracaso que igual imprimio filas es un fracaso. Es lo que
+/// impide que esto se vuelva "cualquier error es una lista vacia".
+#[test]
+fn un_fracaso_con_filas_sigue_siendo_un_fracaso() {
+    assert!(
+        !worklist::board::listing_survives(false, "6512\tSprint 1\n"),
+        "si escribio algo, hay algo que no se esta leyendo"
+    );
+}

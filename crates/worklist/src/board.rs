@@ -268,20 +268,68 @@ const SPRINT_BATCH: usize = 50;
 /// terminal donde contestar: un argumento de menos no es un error, es un
 /// proceso colgado.
 fn jira(op: Op, key: Option<&str>, args: &[&str]) -> Result<String> {
+    let (ok, stdout, fallo) = jira_raw(op, key, args)?;
+    if !ok {
+        return Err(fallo.into());
+    }
+    Ok(stdout)
+}
+
+/// La corrida cruda: si anduvo, que escribio, y el fracaso ya armado.
+///
+/// Existe porque hay una operacion —listar— donde el codigo de salida no
+/// alcanza para decidir, y necesita ver la salida antes de rendirse.
+fn jira_raw(
+    op: Op,
+    key: Option<&str>,
+    args: &[&str],
+) -> Result<(bool, String, anyhow::Error)> {
     let out = Command::new("jira").args(args).output().map_err(|e| {
         Failure::new(op, key, format!("no se pudo correr `jira`: {e} — jira-cli no esta instalado"))
     })?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if !out.status.success() {
-        return Err(Failure::new(
-            op,
-            key,
-            format!("jira {} salio con {:?}: {stderr}{stdout}", args.join(" "), out.status.code()),
-        )
-        .into());
+    let fallo = Failure::new(
+        op,
+        key,
+        format!("jira {} salio con {:?}: {stderr}{stdout}", args.join(" "), out.status.code()),
+    )
+    .into();
+    Ok((out.status.success(), stdout, fallo))
+}
+
+/// Un listado vacio no es un fracaso, y `jira-cli` no los distingue.
+///
+/// `jira sprint list` sobre un board **sin ningun sprint** escribe
+/// `✗ No result found for given query` y sale con 1. Es fiel a *"no encontre
+/// nada"* y no a *"algo salio mal"* — y ese es exactamente el estado del que se
+/// parte, asi que tratarlo como error vuelve **imposible la primera corrida**
+/// sobre cualquier board.
+///
+/// La distincion se hace sin leer el mensaje, que viene en el idioma de quien
+/// corre: **si no salio ninguna fila, no hay nada que leer.** Un fallo que
+/// igual imprimio filas sigue siendo un fallo.
+///
+/// Lo que esto puede confundir es *"no hay ninguno"* con *"no se pudo
+/// preguntar"*. El riesgo esta acotado a que la consulta falle de forma
+/// transitoria **y** el sprint exista, y ahi se duplicaria. Es el mismo trato
+/// que `search_text` ya hace con la JQL: un falso positivo posible pesa menos
+/// que un fracaso seguro. Y un problema real reaparece un paso despues, en
+/// `sprint create`, con su propio mensaje.
+fn jira_listing(op: Op, args: &[&str]) -> Result<String> {
+    let (ok, stdout, fallo) = jira_raw(op, None, args)?;
+    if listing_survives(ok, &stdout) {
+        return Ok(stdout);
     }
-    Ok(stdout)
+    Err(fallo)
+}
+
+/// La decision sola, sin proceso de por medio: **un fracaso sin filas es un
+/// listado vacio; uno con filas sigue siendo un fracaso.**
+///
+/// Esta aparte porque es lo unico que hay que poder probar sin un board.
+pub fn listing_survives(ok: bool, stdout: &str) -> bool {
+    ok || stdout.trim().is_empty()
 }
 
 pub struct JiraBoard {
@@ -602,9 +650,8 @@ fn keys_in(v: &serde_json::Value) -> Vec<String> {
 /// una linea de prosa —el "No result found" de un board vacio, que es el
 /// estado del que se parte— no se puede confundir con un sprint.
 fn find_sprint(name: &str) -> Result<Option<String>> {
-    let out = jira(
+    let out = jira_listing(
         Op::SprintList,
-        None,
         &[
             "sprint", "list",
             // El default es `active,closed`, y los nuestros nacen `future`.
