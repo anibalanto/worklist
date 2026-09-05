@@ -16,6 +16,15 @@ use std::path::Path;
 /// El panorama: la rama de la que se corta todo y a la que nadie empuja.
 pub const PANORAMA: &str = "refs/heads/insecure/all";
 
+/// Si este repo tiene panorama.
+///
+/// Se pregunta **una vez, antes del lote**: que el panorama falte es una
+/// propiedad del repo y no de cada ventana, y repetir el mismo aviso dieciseis
+/// veces convierte una linea util en ruido que se scrollea.
+pub fn has_panorama(repo: &Path) -> bool {
+    rev_parse(repo, PANORAMA).is_some()
+}
+
 /// Donde el servidor anota hasta donde subio una ventana.
 ///
 /// Va en `refs/worklist/**` y no en una rama: es contabilidad del servidor, no

@@ -216,6 +216,15 @@ fn cmd_assign_keys(
     } else {
         read_hook_lines(stdin)?
     };
+    // Una vez, antes del lote: que falte el panorama es del repo, no de cada
+    // ventana. Ver la task `77`.
+    let hay_panorama = worklist::propagate::has_panorama(&repo);
+    if !hay_panorama {
+        println!(
+            "aviso: este repo no tiene {} — lo que se resuelva no sube a ningun lado",
+            worklist::propagate::PANORAMA
+        );
+    }
     for (old, new, refname) in lines {
         if classify(&refname) != RefClass::Secure {
             continue;
@@ -267,14 +276,23 @@ fn cmd_assign_keys(
         }
         if let Some(s) = &r.sprint {
             let creado = if s.created { " (creado)" } else { "" };
-            println!(
-                "  sprint {} -> {}{}: {} issue(s) agregados, {} ya estaban",
-                s.id,
-                s.key,
-                creado,
-                s.added.len(),
-                s.already
-            );
+            match s.already {
+                Some(ya) => println!(
+                    "  sprint {} -> {}{}: {} issue(s) agregados, {ya} ya estaban",
+                    s.id,
+                    s.key,
+                    creado,
+                    s.added.len()
+                ),
+                // Sin haber preguntado, lo unico cierto es la membresia que se
+                // calculo de `items`. Cuantos ya estan del otro lado no se sabe.
+                None => println!(
+                    "  sprint {} -> {}: {} miembro(s) calculados; no se pregunto cuantos ya estan",
+                    s.id,
+                    s.key,
+                    s.added.len()
+                ),
+            }
         }
         if r.new_head != r.old_head {
             println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
@@ -285,10 +303,12 @@ fn cmd_assign_keys(
         // Que la propagacion falle no deshace lo resuelto: la ventana queda
         // adelantada del panorama, que es un estado del que se sale
         // reintentando con `worklist propagate`.
-        match worklist::propagate::propagate(&repo, &r.refname, &r.new_head, dry_run) {
-            Ok(Some(p)) => report_propagated(&p, dry_run),
-            Ok(None) => {}
-            Err(e) => println!("  ! el panorama no avanzo: {e}"),
+        if hay_panorama {
+            match worklist::propagate::propagate(&repo, &r.refname, &r.new_head, dry_run) {
+                Ok(Some(p)) => report_propagated(&p, dry_run),
+                Ok(None) => {}
+                Err(e) => println!("  ! el panorama no avanzo: {e}"),
+            }
         }
     }
     Ok(())
@@ -350,6 +370,13 @@ fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, dry_run: bo
     } else {
         read_hook_lines(stdin)?
     };
+    if !worklist::propagate::has_panorama(&repo) {
+        anyhow::bail!(
+            "este repo no tiene {} — no hay a donde propagar.\n\
+             Corre esto parado en el repo donde vive el panorama.",
+            worklist::propagate::PANORAMA
+        );
+    }
     for (_, new, refname) in lines {
         if classify(&refname) != RefClass::Secure {
             continue;
