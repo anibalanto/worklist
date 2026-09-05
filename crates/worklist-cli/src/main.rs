@@ -322,7 +322,15 @@ fn cmd_bootstrap(project: String, refname: String, base: String, dry_run: bool) 
         };
         // Encontrado no es creado, y la diferencia se ve: sobre lo encontrado
         // el cuerpo no viaja, porque no hay con que probar que no se pisa.
-        let como = if a.created { "" } else { "  (ya existia: el cuerpo no se toco)" };
+        //
+        // **En dry-run no se sabe cual es cual**, porque no se le pregunto a
+        // nadie. Decir "ya existia" sobre los 258 seria afirmar sobre el board
+        // sin haberlo mirado, que es el defecto que `67` corrigio.
+        let como = match (dry_run, a.created) {
+            (true, _) => "",
+            (false, true) => "",
+            (false, false) => "  (ya existia: el cuerpo no se toco)",
+        };
         println!("  {} -> {}{}{}{}", a.slug, a.key, refs, padre, como);
     }
     if !dry_run && r.new_head != r.old_head {
