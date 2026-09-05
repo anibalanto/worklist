@@ -40,6 +40,16 @@ pub enum Step {
     AlreadyRenamed { slug: String, key: String },
 }
 
+/// Si lo que la ventana traeria entra al panorama.
+#[derive(Debug)]
+pub enum Verdict {
+    /// El repo no tiene panorama: **no se pudo probar**, que no es lo mismo
+    /// que haber probado y estar bien.
+    SinPanorama,
+    Entra,
+    Choca { sha: String, subject: String, files: Vec<String> },
+}
+
 #[derive(Debug)]
 pub struct Propagated {
     pub refname: String,
@@ -174,17 +184,15 @@ pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(St
 /// **Los renombres no se prueban**, porque no se copian: se rehacen sobre el
 /// arbol del panorama, y ahi no hay parche que pueda no aplicar.
 ///
-/// `None` si no hay nada que probar o si todo entra. `Some` nombra el primer
-/// commit que no.
-pub fn would_conflict(
-    repo: &Path,
-    refname: &str,
-    tip: &str,
-) -> Result<Option<(String, String, Vec<String>)>> {
+/// **No poder probar no es que entre**, y por eso hay tres respuestas y no
+/// dos: un repo sin panorama —que hoy es el de la instalacion— haria que
+/// devolver "entra" fuera aceptar en silencio algo que nadie miro. Ver la task
+/// `77`.
+pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> {
     if tip == crate::check_push::ALL_ZEROS {
-        return Ok(None);
+        return Ok(Verdict::Entra);
     }
-    let Some(panorama) = rev_parse(repo, PANORAMA) else { return Ok(None) };
+    let Some(panorama) = rev_parse(repo, PANORAMA) else { return Ok(Verdict::SinPanorama) };
     let (_, commits) = pending(repo, refname, tip)?;
 
     let mut sobre = panorama;
@@ -208,7 +216,7 @@ pub fn would_conflict(
                 .collect();
             files.sort();
             files.dedup();
-            return Ok(Some((sha.clone(), subject.clone(), files)));
+            return Ok(Verdict::Choca { sha: sha.clone(), subject: subject.clone(), files });
         }
         // El resultado se envuelve en un commit para que el siguiente parche se
         // pruebe sobre el arbol que el anterior dejo, y no sobre el original.
@@ -216,7 +224,7 @@ pub fn would_conflict(
             .trim()
             .to_string();
     }
-    Ok(None)
+    Ok(Verdict::Entra)
 }
 
 /// Sube al panorama lo que la ventana resolvio y el panorama todavia no tiene.

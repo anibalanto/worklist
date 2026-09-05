@@ -226,10 +226,11 @@ fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
 
     let panorama = rev(r, "insecure/all");
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let (_, _, files) =
-        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip)
-            .unwrap()
-            .expect("el prechequeo tiene que verlo");
+    let worklist::propagate::Verdict::Choca { files, .. } =
+        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap()
+    else {
+        panic!("el prechequeo tiene que verlo")
+    };
     assert_eq!(files, vec!["o.task.md".to_string()]);
     assert_eq!(rev(r, "insecure/all"), panorama, "probar no escribe");
 }
@@ -253,11 +254,32 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
     run(r, &["commit", "-aqm", "edito q en el panorama"]);
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    assert!(worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip)
-        .unwrap()
-        .is_none());
+    assert!(matches!(
+        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
+        worklist::propagate::Verdict::Entra
+    ));
     // Y de hecho entra.
     propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
     assert!(show(r, "insecure/all", "o.task.md").contains("lo que dice la ventana"));
     assert!(show(r, "insecure/all", "q.task.md").contains("otra cosa"));
+}
+
+/// **No poder probar no es que entre.** El repo de la instalacion no tiene
+/// panorama —16 ventanas y ningun `insecure/all`—, y ahi devolver "entra"
+/// seria aceptar en silencio algo que nadie miro. Ver la task `77`.
+#[test]
+fn sin_panorama_el_prechequeo_lo_dice_en_vez_de_dejar_pasar() {
+    let dir = arbol_con_cita();
+    let r = &dir.path().join("repo");
+    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+
+    // El servidor que solo recibio ventanas: el panorama nunca llego.
+    run(r, &["checkout", "-q", "--detach"]);
+    run(r, &["branch", "-q", "-D", "insecure/all"]);
+
+    assert!(matches!(
+        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
+        worklist::propagate::Verdict::SinPanorama
+    ));
 }

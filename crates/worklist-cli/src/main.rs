@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use worklist::check_push::{check_one, classify, RefClass};
 use worklist::board::{dry_run_plan, JiraBoard, Board};
+use worklist::propagate::Verdict;
 use worklist::provider::FileProvider;
 
 #[derive(Parser)]
@@ -515,18 +516,25 @@ fn cmd_check_push(
         // Y lo mismo contra el panorama: de `all` se corta todo, asi que un
         // conflicto escrito ahi entra en el proximo recorte de cada ventana.
         // Probarlo aca es lo que evita tener que anotarlo alla.
-        if let Some((sha, subject, files)) =
-            worklist::propagate::would_conflict(&repo, &refname, &new)?
-        {
-            any_rejected = true;
-            println!(
-                "reject: {} {subject} no entra al panorama — choca en {}",
-                short(&sha),
-                files.join(", ")
-            );
-            println!(
-                "        alguien mas escribio eso desde otra ventana. Regenera la tuya y volve a aplicarlo."
-            );
+        match worklist::propagate::would_conflict(&repo, &refname, &new)? {
+            Verdict::Entra => {}
+            // No poder probar no es que entre. Aceptar en silencio seria decir
+            // que se verifico algo que nadie miro. Ver la task `77`.
+            Verdict::SinPanorama => println!(
+                "aviso: {refname} no se pudo probar contra el panorama — este repo no tiene {}",
+                worklist::propagate::PANORAMA
+            ),
+            Verdict::Choca { sha, subject, files } => {
+                any_rejected = true;
+                println!(
+                    "reject: {} {subject} no entra al panorama — choca en {}",
+                    short(&sha),
+                    files.join(", ")
+                );
+                println!(
+                    "        alguien mas escribio eso desde otra ventana. Regenera la tuya y volve a aplicarlo."
+                );
+            }
         }
     }
     if any_rejected {
