@@ -283,3 +283,54 @@ fn sin_panorama_el_prechequeo_lo_dice_en_vez_de_dejar_pasar() {
         worklist::propagate::Verdict::NoPanorama
     ));
 }
+
+/// Sin estar parado en el panorama —un bare, o un HEAD suelto— el trabajo va a
+/// un worktree temporal y la ref se mueve al final. Es el camino del servidor.
+#[test]
+fn desde_afuera_del_panorama_usa_un_worktree_temporal() {
+    let dir = arbol_con_cita();
+    let r = &dir.path().join("repo");
+    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+
+    let wt = dir.path().join("w");
+    run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
+    item_con(&wt, "o.task.md", Some("1"), "editado en la ventana");
+    run(&wt, &["commit", "-aqm", "edito o"]);
+    run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    // Nadie tiene el panorama abierto.
+    run(r, &["checkout", "-q", "--detach"]);
+
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+
+    assert_eq!(p.steps.len(), 1);
+    assert!(show(r, "insecure/all", "o.task.md").contains("editado en la ventana"));
+    assert_eq!(rev(r, "insecure/all"), p.panorama_new, "la ref quedo movida");
+}
+
+/// Y no la mueve si otro worktree la tiene abierta: ese indice quedaria
+/// apuntando al arbol anterior, y el sintoma no dice la causa.
+#[test]
+fn no_mueve_el_panorama_que_otro_worktree_tiene_abierto() {
+    let dir = arbol_con_cita();
+    let r = &dir.path().join("repo");
+    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+
+    let wt = dir.path().join("w");
+    run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
+    item_con(&wt, "o.task.md", Some("1"), "editado");
+    run(&wt, &["commit", "-aqm", "edito o"]);
+    run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    run(r, &["checkout", "-q", "--detach"]);
+    let otro = dir.path().join("otro");
+    run(r, &["worktree", "add", "-q", otro.to_str().unwrap(), "insecure/all"]);
+
+    let panorama = rev(r, "insecure/all");
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap_err().to_string();
+
+    assert!(e.contains("otro worktree"), "{e}");
+    assert_eq!(rev(r, "insecure/all"), panorama, "no se movio");
+}

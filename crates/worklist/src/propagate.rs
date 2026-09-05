@@ -263,11 +263,49 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, dry_run: bool) -> Result
         }));
     }
 
-    // Un worktree temporal en --detach: el panorama no tiene worktree en un
-    // repo bare, y darle uno lo dejaria sin poder recibir el proximo corte.
-    let tmp = repo.join(format!("../.worklist-propagate-{}", refname.replace('/', "-")));
-    let _ = std::fs::remove_dir_all(&tmp);
-    git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), &panorama_old])?;
+    // Donde este el panorama decide donde se escribe. En un bare no esta en
+    // ningun lado y va un worktree temporal; en un clon puede estar abierto,
+    // y ahi mover la ref por debajo deja ese indice apuntando al arbol
+    // anterior — el defecto de `5o`.
+    let aca = git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+        == PANORAMA;
+    if !aca {
+        if let Some(wt) = crate::checked_out_at(repo, PANORAMA) {
+            bail!(
+                "{PANORAMA} esta checkouteada en otro worktree y no se puede mover:\n\
+                 \x20 {wt}\n\
+                 \n\
+                 moverla dejaria ese worktree con el indice del arbol anterior. Corre\n\
+                 esto parado ahi, o saca el worktree primero."
+            );
+        }
+    }
+    if aca {
+        let sucio = git_output(repo, &["status", "--porcelain"])?;
+        if !sucio.trim().is_empty() {
+            bail!(
+                "el panorama tiene cambios sin commitear, y propagar cherry-pickea encima:\n\
+                 \x20 {}\n\
+                 \n\
+                 comitealos o descartalos antes.",
+                sucio.lines().take(3).collect::<Vec<_>>().join("\n  ")
+            );
+        }
+    }
+
+    let tmp = if aca {
+        repo.to_path_buf()
+    } else {
+        let tmp = repo.join(format!("../.worklist-propagate-{}", refname.replace('/', "-")));
+        let _ = std::fs::remove_dir_all(&tmp);
+        git_output(
+            repo,
+            &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), &panorama_old],
+        )?;
+        tmp
+    };
 
     let result = (|| -> Result<Vec<Step>> {
         let mut steps = Vec::new();
@@ -308,14 +346,18 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, dry_run: bool) -> Result
     })();
 
     let panorama_new = git_output(&tmp, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string());
-    let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    if !aca {
+        let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    }
     let steps = result?;
     let panorama_new = panorama_new?;
 
     // El panorama primero, la marca despues: si algo se cae en el medio, la
     // marca sin mover hace que el reintento vuelva a pasar por lo mismo, y no
     // que se saltee lo que no subio.
-    if panorama_new != panorama_old {
+    //
+    // Parado en la rama, los cherry-picks ya la movieron.
+    if !aca && panorama_new != panorama_old {
         git_output(repo, &["update-ref", PANORAMA, &panorama_new, &panorama_old])?;
     }
     git_output(repo, &["update-ref", &propagated_ref(refname), tip])?;
