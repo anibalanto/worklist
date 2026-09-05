@@ -2,6 +2,11 @@ kind: governs
 endpoint:
   0:
     link: path <
+    accepted:
+    - agree:
+      - test
+      link: capture 0b9684938232b8d71fe93568e8c711c3
+      hash: d65f6dbb3632f77cac26053a9ccfed6bae0a01d5002a7a40a7d8b68150795770
   1:
     link: capture 9b0bf116f2e8d94fbbdc89e5482bfbb7
     n:
