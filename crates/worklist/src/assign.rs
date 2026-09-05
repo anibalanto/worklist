@@ -68,7 +68,11 @@ pub struct SprintResult {
     /// Las claves que entraron ahora.
     pub added: Vec<String>,
     /// Cuantas ya estaban adentro. **Volver a correrlo es esto y nada mas.**
-    pub already: usize,
+    ///
+    /// `None` es *"no se pregunto"* — el `--dry-run` no habla con el proveedor,
+    /// y decir `0` ahi seria afirmar sobre el board sin haberlo mirado. Es el
+    /// mismo defecto que el aviso de "no quedo bajo X" que `67` corrigio.
+    pub already: Option<usize>,
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
@@ -306,7 +310,7 @@ pub fn assign_window(
                         key: sprint_key(&text).unwrap_or_else(|| "(dry-run)".into()),
                         created: false,
                         added: members,
-                        already: 0,
+                        already: None,
                     })
                 } else {
                     // El nombre del otro lado lo escribe el worklist, con la
@@ -343,7 +347,7 @@ pub fn assign_window(
                         key,
                         created,
                         added: faltan.iter().map(|s| s.to_string()).collect(),
-                        already: members.len() - faltan.len(),
+                        already: Some(members.len() - faltan.len()),
                     })
                 }
             }

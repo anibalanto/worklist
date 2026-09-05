@@ -52,7 +52,7 @@ fn el_sprint_se_crea_y_lleva_su_subarbol() {
     assert!(s.created, "no existia del otro lado");
     assert_eq!(s.id, "3");
     assert_eq!(slugs(&res, &s.added), vec!["n", "o"], "la user story con su task");
-    assert_eq!(s.already, 0);
+    assert_eq!(s.already, Some(0));
 
     // El id del proveedor queda en git, que es lo que hace que la proxima
     // corrida no vuelva a buscarlo.
@@ -98,7 +98,7 @@ fn volver_a_correrlo_no_duplica_ni_escribe() {
     assert_eq!(s.key, primera.sprint.as_ref().unwrap().key, "el mismo sprint");
     assert!(!s.created);
     assert!(s.added.is_empty(), "no habia nada que mandar: {:?}", s.added);
-    assert_eq!(s.already, 2);
+    assert_eq!(s.already, Some(2));
     assert_eq!(spy.created_sprints.borrow().len(), 1, "se creo una sola vez");
     assert_eq!(spy.sprinted.borrow().len(), 1, "y se escribio una sola vez");
 }
@@ -262,4 +262,45 @@ impl worklist::board::Board for ConBoard {
         self.boards.borrow_mut().push(board.into());
         self.inner.sprint_items(board, sprint)
     }
+}
+
+/// Y el `--dry-run` **no dice cuantos ya estaban**, porque no le pregunto a
+/// nadie. Decir `0` seria afirmar sobre el board sin haberlo mirado, que es el
+/// defecto que `67` corrigio del otro lado.
+#[test]
+fn el_dry_run_no_afirma_cuantos_ya_estaban() {
+    let dir = common::arbol();
+    let r = dir.path().join("repo");
+    common::sprint(&r, "1", "El sprint", &["n"], None);
+    common::run(&r, &["add", "-A"]);
+    common::run(&r, &["commit", "-qm", "sprint"]);
+
+    let spy = common::Spy::default();
+    let head = String::from_utf8(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let res = worklist::assign::assign_window(
+        &r,
+        "refs/heads/insecure/all",
+        worklist::check_push::ALL_ZEROS,
+        &head,
+        "https://x",
+        &spy,
+        "701",
+        true,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(res.sprint.unwrap().already, None, "no se pregunto");
+    assert!(spy.inside.borrow().is_empty(), "y de verdad no se pregunto");
 }
