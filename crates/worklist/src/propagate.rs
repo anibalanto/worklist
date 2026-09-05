@@ -45,9 +45,9 @@ pub enum Step {
 pub enum Verdict {
     /// El repo no tiene panorama: **no se pudo probar**, que no es lo mismo
     /// que haber probado y estar bien.
-    SinPanorama,
-    Entra,
-    Choca { sha: String, subject: String, files: Vec<String> },
+    NoPanorama,
+    Applies,
+    Conflict { sha: String, subject: String, files: Vec<String> },
 }
 
 #[derive(Debug)]
@@ -190,9 +190,9 @@ pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(St
 /// `77`.
 pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> {
     if tip == crate::check_push::ALL_ZEROS {
-        return Ok(Verdict::Entra);
+        return Ok(Verdict::Applies);
     }
-    let Some(panorama) = rev_parse(repo, PANORAMA) else { return Ok(Verdict::SinPanorama) };
+    let Some(panorama) = rev_parse(repo, PANORAMA) else { return Ok(Verdict::NoPanorama) };
     let (_, commits) = pending(repo, refname, tip)?;
 
     let mut sobre = panorama;
@@ -216,7 +216,7 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
                 .collect();
             files.sort();
             files.dedup();
-            return Ok(Verdict::Choca { sha: sha.clone(), subject: subject.clone(), files });
+            return Ok(Verdict::Conflict { sha: sha.clone(), subject: subject.clone(), files });
         }
         // El resultado se envuelve en un commit para que el siguiente parche se
         // pruebe sobre el arbol que el anterior dejo, y no sobre el original.
@@ -224,7 +224,7 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
             .trim()
             .to_string();
     }
-    Ok(Verdict::Entra)
+    Ok(Verdict::Applies)
 }
 
 /// Sube al panorama lo que la ventana resolvio y el panorama todavia no tiene.

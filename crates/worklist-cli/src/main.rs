@@ -517,14 +517,14 @@ fn cmd_check_push(
         // conflicto escrito ahi entra en el proximo recorte de cada ventana.
         // Probarlo aca es lo que evita tener que anotarlo alla.
         match worklist::propagate::would_conflict(&repo, &refname, &new)? {
-            Verdict::Entra => {}
+            Verdict::Applies => {}
             // No poder probar no es que entre. Aceptar en silencio seria decir
             // que se verifico algo que nadie miro. Ver la task `77`.
-            Verdict::SinPanorama => println!(
+            Verdict::NoPanorama => println!(
                 "aviso: {refname} no se pudo probar contra el panorama — este repo no tiene {}",
                 worklist::propagate::PANORAMA
             ),
-            Verdict::Choca { sha, subject, files } => {
+            Verdict::Conflict { sha, subject, files } => {
                 any_rejected = true;
                 println!(
                     "reject: {} {subject} no entra al panorama — choca en {}",

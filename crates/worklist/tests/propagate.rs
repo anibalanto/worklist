@@ -226,7 +226,7 @@ fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
 
     let panorama = rev(r, "insecure/all");
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let worklist::propagate::Verdict::Choca { files, .. } =
+    let worklist::propagate::Verdict::Conflict { files, .. } =
         worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap()
     else {
         panic!("el prechequeo tiene que verlo")
@@ -256,7 +256,7 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
     let tip = rev(r, "refs/heads/secure/sprint/1");
     assert!(matches!(
         worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
-        worklist::propagate::Verdict::Entra
+        worklist::propagate::Verdict::Applies
     ));
     // Y de hecho entra.
     propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
@@ -280,6 +280,6 @@ fn sin_panorama_el_prechequeo_lo_dice_en_vez_de_dejar_pasar() {
 
     assert!(matches!(
         worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
-        worklist::propagate::Verdict::SinPanorama
+        worklist::propagate::Verdict::NoPanorama
     ));
 }
