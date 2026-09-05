@@ -70,6 +70,21 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Sube al panorama lo que una ventana resolvio. Corre al final del
+    /// `post-receive`, y a mano para reintentar lo que no subio.
+    Propagate {
+        /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo del hook.
+        #[arg(long, conflicts_with_all = ["window", "all_windows"])]
+        stdin: bool,
+        /// Una ventana por su id: `--window 1`. Se puede repetir.
+        #[arg(long = "window", conflicts_with = "all_windows")]
+        window: Vec<String>,
+        /// Todas las ventanas del repo, en orden numerico.
+        #[arg(long)]
+        all_windows: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Busca un issue por titulo antes de crear, para no duplicar en un reintento.
     CreateOrFind {
         #[arg(long)]
@@ -138,6 +153,9 @@ fn main() -> Result<()> {
         }
         Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
             cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
+        }
+        Cmd::Propagate { stdin, window, all_windows, dry_run } => {
+            cmd_propagate(stdin, &window, all_windows, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             let description = format!("Fuente: {source}");
@@ -242,8 +260,75 @@ fn cmd_assign_keys(
         if r.new_head != r.old_head {
             println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
         }
+        // Y recien ahora sube: lo que mas falta arriba son las claves, y las
+        // acaba de escribir esta corrida. Ver `concepts/propagation.md`.
+        //
+        // Que la propagacion falle no deshace lo resuelto: la ventana queda
+        // adelantada del panorama, que es un estado del que se sale
+        // reintentando con `worklist propagate`.
+        match worklist::propagate::propagate(&repo, &r.refname, &r.new_head, dry_run) {
+            Ok(Some(p)) => report_propagated(&p, dry_run),
+            Ok(None) => {}
+            Err(e) => println!("  ! el panorama no avanzo: {e}"),
+        }
     }
     Ok(())
+}
+
+/// Sube lo que las ventanas nombradas resolvieron.
+///
+/// **No pide credencial**: la propagacion es entre ramas de git y no habla con
+/// ningun proveedor. Es lo que la deja reintentable cuando el token falta.
+fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, dry_run: bool) -> Result<()> {
+    let repo = std::env::current_dir()?;
+    let lines = if all_windows || !windows.is_empty() {
+        window_lines(windows, all_windows)?
+    } else {
+        read_hook_lines(stdin)?
+    };
+    for (_, new, refname) in lines {
+        if classify(&refname) != RefClass::Secure {
+            continue;
+        }
+        match worklist::propagate::propagate(&repo, &refname, &new, dry_run)? {
+            Some(p) => report_propagated(&p, dry_run),
+            None => println!("{refname}: el panorama ya tiene todo lo suyo"),
+        }
+    }
+    Ok(())
+}
+
+fn report_propagated(p: &worklist::propagate::Propagated, dry_run: bool) {
+    use worklist::propagate::Step;
+    let verbo = if dry_run { "subiria" } else { "sube" };
+    println!("{}: {verbo} {} commit(s) al panorama", p.refname, p.steps.len());
+    for step in &p.steps {
+        match step {
+            Step::Picked { sha, subject } => println!("  {} {subject}", short(sha)),
+            Step::Empty { sha, subject } => {
+                println!("  {} {subject}  (el panorama ya lo tenia)", short(sha))
+            }
+            // El renombre no se copia: se rehace, y su reescritura es la del
+            // panorama entero, no la de los 19 archivos de la ventana.
+            Step::Renamed { slug, key, rewritten } => {
+                let refs = match rewritten {
+                    0 => String::new(),
+                    n => format!("  ({n} refs reescritas en el panorama)"),
+                };
+                println!("  rename {slug} -> {key}  (rehecho){refs}");
+            }
+            Step::AlreadyRenamed { slug, key } => {
+                println!("  rename {slug} -> {key}  (el panorama ya lo tenia)")
+            }
+        }
+    }
+    if !dry_run && p.panorama_new != p.panorama_old {
+        println!(
+            "  panorama: {} -> {}",
+            short(&p.panorama_old),
+            short(&p.panorama_new)
+        );
+    }
 }
 
 fn short(sha: &str) -> &str {
