@@ -1,0 +1,4 @@
+file: crates/worklist/src/board.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "jira_type")) @target

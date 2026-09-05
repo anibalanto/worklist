@@ -1,0 +1,4 @@
+file: crates/worklist/src/window.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "window_files")) @target

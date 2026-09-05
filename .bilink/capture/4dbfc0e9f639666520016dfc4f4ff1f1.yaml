@@ -1,0 +1,4 @@
+file: crates/worklist/src/board.rs
+query: |-
+  (trait_item
+    name: (type_identifier) @n0 (#eq? @n0 "Board")) @target

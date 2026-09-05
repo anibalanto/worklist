@@ -1,0 +1,8 @@
+file: crates/worklist/src/board.rs
+query: |-
+  (impl_item
+    trait: (type_identifier) @n0 (#eq? @n0 "Board")
+    type: (type_identifier) @n1 (#eq? @n1 "JiraBoard")
+    body: (declaration_list
+    (function_item
+    name: (identifier) @n2 (#eq? @n2 "sprint_items")) @target))

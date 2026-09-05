@@ -1,0 +1,4 @@
+file: crates/worklist/src/check_push.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "classify")) @target

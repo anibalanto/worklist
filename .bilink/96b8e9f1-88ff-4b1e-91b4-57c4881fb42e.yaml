@@ -1,0 +1,17 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+  1:
+    link: capture 9b0bf116f2e8d94fbbdc89e5482bfbb7
+    accepted:
+    - agree:
+      - test
+      link: capture 9b0bf116f2e8d94fbbdc89e5482bfbb7
+      hash: 84286e36a8a05cc2ee78940411f99b0c04176c1366083ccaf489d11d7ef2287a
+      hash_ast: 25a3d356e43064fcf2a100623a7b5db169dff096f8ac7fc2adcec85c032bd2a2
+      n:
+        1:
+          link: capture b15023636480d6a98dc1e3957a4844f0
+          hash: aa626c63e3389b94fd0287cca773cd7b51f329e1d1d0767f65de197e46d8f07f
+          hash_ast: a33fd71c667715ddf142bf1fc284a6465ee00b1ab061640748af9208f2327758

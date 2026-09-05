@@ -1,0 +1,12 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+  1:
+    link: capture 01b25b1d28c75cf65e7e224fe80c7f8d
+    accepted:
+    - agree:
+      - test
+      link: capture 01b25b1d28c75cf65e7e224fe80c7f8d
+      hash: 0f242d6223c16c2c5b72397099c86f60776933fb98518ee6684d8d178ca9b2f8
+      hash_ast: c9df05efafe66704faeb5a2349c26849e12431351bd7f56e0c43460b59bdff9a
