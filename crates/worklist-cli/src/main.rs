@@ -177,20 +177,37 @@ fn main() -> Result<()> {
             cmd_propagate(stdin, &window, all_windows, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
-            let description = format!("Fuente: {source}");
-            if dry_run {
-                println!("{}", dry_run_plan(&project, &r#type, &titulo, &description)?);
-                return Ok(());
-            }
-            worklist::port::preflight()?;
-            let board = JiraBoard::new(project);
-            // Sin `--parent`: este comando resuelve un item suelto, y la
-            // jerarquia la calcula `assign-keys` sobre la ventana entera.
-            let outcome = board.create_or_find(&titulo, &r#type, &description, None)?;
-            println!("{}", outcome.key());
-            Ok(())
+            cmd_create_or_find(project, r#type, source, titulo, dry_run)
         }
     }
+}
+
+/// Busca por titulo antes de crear, para que un reintento no duplique.
+///
+/// Extraida de `main` como sus hermanas, y no por prolijidad: mientras vivio
+/// adentro del `match`, el bilink que gobierna su § "Comportamiento" apuntaba a
+/// `fn main` entero, asi que **cualquier subcomando nuevo lo ensuciaba**. Un
+/// bilink que se enciende por trabajo ajeno no señala nada. Ver
+/// `commands/create-or-find.md`.
+fn cmd_create_or_find(
+    project: String,
+    item_type: String,
+    source: String,
+    titulo: String,
+    dry_run: bool,
+) -> Result<()> {
+    let description = format!("Fuente: {source}");
+    if dry_run {
+        println!("{}", dry_run_plan(&project, &item_type, &titulo, &description)?);
+        return Ok(());
+    }
+    worklist::port::preflight()?;
+    let board = JiraBoard::new(project);
+    // Sin `--parent`: este comando resuelve un item suelto, y la jerarquia la
+    // calcula `assign-keys` sobre la ventana entera.
+    let outcome = board.create_or_find(&titulo, &item_type, &description, None)?;
+    println!("{}", outcome.key());
+    Ok(())
 }
 
 fn cmd_assign_keys(
