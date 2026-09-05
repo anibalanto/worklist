@@ -4,6 +4,9 @@ endpoint:
     link: path <
   1:
     link: capture 6b0ee07ccf8a1ce281e862221e64103b
+    n:
+      1:
+        link: capture 498811ad808e193eefdc1de9577f59a2
     accepted:
     - agree:
       - test
