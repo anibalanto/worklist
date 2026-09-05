@@ -277,6 +277,29 @@ pub(crate) fn git_command(repo: &Path) -> Command {
     cmd
 }
 
+/// Si `branch` esta checkouteada en algun worktree, cual.
+///
+/// `git branch -f` se niega a mover una rama con worktree activo; `update-ref`
+/// no, y la mueve dejando el indice del worktree apuntando al arbol anterior.
+/// El resultado es un `git status` con archivos "modificados" que nadie toco, y
+/// un `git merge` que se niega a seguir por cambios locales que no existen.
+pub(crate) fn checked_out_at(repo: &Path, branch: &str) -> Option<String> {
+    let listing = git_command(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())?;
+    let mut path = None;
+    for line in listing.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(p.to_string());
+        } else if line.strip_prefix("branch ") == Some(branch) {
+            return path;
+        }
+    }
+    None
+}
+
 fn git(repo: &Path, args: &[&str]) -> Result<()> {
     let status = git_command(repo)
         .args(args)

@@ -107,3 +107,63 @@ fn deja_la_ref_del_panorama_movida() {
     .unwrap();
     assert_eq!(head.trim(), res.new_head);
 }
+
+/// **Parado en la rama se trabaja en el arbol**, como cualquier commit. Es el
+/// caso real de hoy: el panorama es un worktree del clon, no una rama del bare.
+#[test]
+fn parado_en_el_panorama_escribe_en_el_arbol() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    let spy = Spy::default();
+
+    correr(&r, &spy).unwrap();
+
+    // El worktree quedo sano: los archivos renombrados en disco, y nada
+    // "modificado" que nadie toco — que es el defecto de `5o`.
+    assert!(r.join("ACC-1.epic.md").exists(), "el renombre esta en el arbol");
+    assert!(!r.join("1.epic.md").exists());
+    let status = String::from_utf8(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["status", "--short"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(status.trim().is_empty(), "sin cambios fantasma: {status:?}");
+}
+
+/// Y no mueve una rama que otro worktree tiene abierta: serian ciento y pico
+/// de renombres dejando ese indice apuntando al arbol anterior.
+#[test]
+fn no_mueve_el_panorama_si_lo_tiene_otro_worktree() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    let otro = dir.path().join("otro");
+    // Primero nos salimos de la rama —para caer en el camino del worktree
+    // temporal— y recien ahi otro la toma.
+    common::run(&r, &["checkout", "-q", "--detach"]);
+    common::run(&r, &["worktree", "add", "-q", otro.to_str().unwrap(), "insecure/all"]);
+
+    let spy = Spy::default();
+    let err = bootstrap(&r, REF, "https://x", &spy, false).unwrap_err().to_string();
+    assert!(err.contains("otro worktree"), "tiene que nombrar el problema: {err}");
+    assert!(err.contains("otro"), "y donde esta: {err}");
+    assert!(spy.created.borrow().is_empty(), "y no le pidio nada al proveedor");
+}
+
+/// El arbol sucio tampoco: `rename_one` commitea con `add -A`, asi que lo que
+/// hubiera sin commitear se colaria adentro del renombre.
+#[test]
+fn no_corre_sobre_un_arbol_sucio() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    std::fs::write(r.join("sin-commitear.txt"), "algo").unwrap();
+
+    let spy = Spy::default();
+    let err = bootstrap(&r, REF, "https://x", &spy, false).unwrap_err().to_string();
+    assert!(err.contains("sin commitear"), "{err}");
+    assert!(spy.created.borrow().is_empty());
+}

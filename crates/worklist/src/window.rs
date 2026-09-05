@@ -128,25 +128,6 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
 ///
 /// Vacio quiere decir que la rama no existe, o que su punta ya esta contenida
 /// en el corte nuevo. Cualquier otra cosa es trabajo que se perderia.
-/// Si `branch` esta checkouteada en algun worktree, cual.
-///
-/// `git branch -f` se niega a mover una rama con worktree activo; `update-ref`
-/// no, y la mueve dejando el indice del worktree apuntando al arbol anterior.
-/// El resultado es un `git status` con archivos "modificados" que nadie toco, y
-/// un `git merge` que se niega a seguir por cambios locales que no existen.
-fn checked_out_at(repo: &Path, branch: &str) -> Option<String> {
-    let listing = git_output(repo, &["worktree", "list", "--porcelain"]).ok()?;
-    let mut path = None;
-    for line in listing.lines() {
-        if let Some(p) = line.strip_prefix("worktree ") {
-            path = Some(p.to_string());
-        } else if line.strip_prefix("branch ") == Some(branch) {
-            return path;
-        }
-    }
-    None
-}
-
 fn would_discard(repo: &Path, branch: &str, head: &str) -> Vec<String> {
     if git_output(repo, &["rev-parse", "--verify", "--quiet", branch]).is_err() {
         return Vec::new();
@@ -184,7 +165,7 @@ pub fn open(
     // desincronizado, y el sintoma no dice la causa — archivos "modificados"
     // que nadie toco. Ni con `--force`: forzar autoriza a descartar commits a
     // sabiendas, no a dejar un checkout inconsistente.
-    if let Some(wt) = checked_out_at(repo, &branch) {
+    if let Some(wt) = crate::checked_out_at(repo, &branch) {
         bail!(
             "secure/sprint/{sprint_id} esta checkouteada en un worktree y no se puede mover:\n\
              \x20 {wt}\n\

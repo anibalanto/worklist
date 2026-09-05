@@ -619,9 +619,21 @@ pub struct BootstrapResult {
 /// puede tener lo primero sin prometer lo segundo — que es exactamente lo que
 /// "insegura" significa.
 ///
-/// **Corre en el servidor, sobre el panorama, y no es un push.** `insecure/**`
-/// rechaza escrituras del cliente; que el servidor escriba ahi es lo que ya
-/// hace la propagacion. Ver `concepts/propagation.md`.
+/// **Corre donde el panorama vive**, que hoy es un worktree del clon y manana
+/// puede ser una rama del bare. Las dos formas estan cubiertas:
+///
+/// | | |
+/// |---|---|
+/// | la rama esta checkouteada **aca** | se trabaja en el arbol y se commitea, como cualquiera |
+/// | no lo esta | worktree temporal en `--detach`, y `update-ref` al final |
+///
+/// **Lo que no se hace es mover una rama que otro worktree tiene abierta.** Es
+/// el defecto de `5o`: `update-ref` la mueve igual y deja ese worktree con el
+/// indice del arbol anterior, y aca serian ciento y pico de renombres. Sobre
+/// eso no hay `--force` que valga.
+///
+/// Y no es un push: `insecure/**` rechaza escrituras del **cliente**, que es
+/// otra cosa que escribir en el arbol donde uno esta parado.
 ///
 /// De las cinco pasadas hace **solo la primera**, y una parte de la segunda:
 /// el cuerpo viaja unicamente donde el issue se **creo**. Sobre uno que ya
@@ -639,6 +651,38 @@ pub fn bootstrap(
     if raw.is_empty() {
         return Ok(None);
     }
+
+    // Donde esta parado quien lo corre decide como se escribe.
+    let aca = git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+        == refname;
+    if !aca {
+        if let Some(wt) = crate::checked_out_at(repo, refname) {
+            bail!(
+                "{refname} esta checkouteada en otro worktree y no se puede mover:\n\
+                 \x20 {wt}\n\
+                 \n\
+                 moverla dejaria ese worktree con el indice del arbol anterior, y aca son\n\
+                 {n} renombres. Corre esto parado ahi, o saca el worktree primero.",
+                n = raw.len()
+            );
+        }
+    }
+    // Trabajar en el arbol de uno exige que este limpio: `rename_one` commitea
+    // con `add -A`, asi que lo que hubiera sin commitear se colaria adentro.
+    if aca && !dry_run {
+        let sucio = git_output(repo, &["status", "--porcelain"])?;
+        if !sucio.trim().is_empty() {
+            bail!(
+                "el arbol tiene cambios sin commitear, y el renombre commitea con `add -A`:\n\
+                 \x20 {}\n\
+                 \n\
+                 comitealos o descartalos antes.",
+                sucio.lines().take(3).collect::<Vec<_>>().join("\n  ")
+            );
+        }
+    }
     let slugs: Vec<String> =
         raw.iter().map(|s| s.split('\t').next().unwrap().to_string()).collect();
     let types: HashMap<String, String> = raw
@@ -649,9 +693,14 @@ pub fn bootstrap(
         })
         .collect();
 
-    let tmp = tempdir_path(repo, &format!("bootstrap-{refname}"));
-    let _ = std::fs::remove_dir_all(&tmp);
-    git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), &head])?;
+    let tmp = if aca {
+        repo.to_path_buf()
+    } else {
+        let tmp = tempdir_path(repo, &format!("bootstrap-{refname}"));
+        let _ = std::fs::remove_dir_all(&tmp);
+        git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), &head])?;
+        tmp
+    };
 
     let result = (|| -> Result<(Vec<String>, Vec<Assigned>, String)> {
         let order = crate::topo_order(&tmp, &slugs)?;
@@ -680,10 +729,14 @@ pub fn bootstrap(
         Ok((order, assigned, new_head))
     })();
 
-    let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    if !aca {
+        let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    }
     let (order, assigned, new_head) = result?;
 
-    if !dry_run && new_head != head {
+    // Parado en la rama, los commits ya la movieron: `update-ref` seria mover
+    // dos veces la misma cosa.
+    if !aca && !dry_run && new_head != head {
         git_output(repo, &["update-ref", refname, &new_head, &head])?;
     }
     Ok(Some(BootstrapResult {
