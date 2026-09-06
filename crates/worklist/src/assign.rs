@@ -103,6 +103,27 @@ pub fn pending_requests(repo: &Path, rev: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Los sprints que todavia no tienen `key`: `(numero, ruta)`.
+///
+/// Un sprint no es un issue —se pide con `create_or_find_sprint`— pero uno sin
+/// clave es lo mismo que un item sin clave: algo que el proveedor todavia no
+/// nombra. Dejarlos afuera producia el agujero que el board mostro, con el
+/// sprint en curso entre los que faltaban. Ver `ACC-299`.
+pub fn sprints_sin_key(repo: &Path, rev: &str) -> Result<Vec<(String, String)>> {
+    let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
+    let mut out = Vec::new();
+    for name in listing.lines() {
+        let Some(base) = name.strip_prefix("_sprints/") else { continue };
+        let Some(id) = base.strip_suffix(".sprint.md") else { continue };
+        let text = git_output(repo, &["show", &format!("{rev}:{name}")])?;
+        if sprint_key(&text).is_none() {
+            out.push((id.to_string(), name.to_string()));
+        }
+    }
+    out.sort_by_key(|(id, _)| id.parse::<u32>().unwrap_or(u32::MAX));
+    Ok(out)
+}
+
 /// Todos los items del arbol, con su tipo — tengan clave o no.
 ///
 /// Distinto de `pending_requests`, que lista **lo que hay que pedir**. Quien
@@ -324,55 +345,7 @@ pub fn assign_window(
         // y ahi los ids son slugs hasta que la pasada 1 los reescribe.
         let sprint = match &sprint_file {
             None => None,
-            Some((id, file)) => {
-                let path = tmp.join(file);
-                let text = std::fs::read_to_string(&path)
-                    .with_context(|| format!("leyendo {file}"))?;
-                let members = sprint_members(&tmp, &sprint_declared(&text))?;
-                if dry_run {
-                    Some(SprintResult {
-                        id: id.clone(),
-                        key: sprint_key(&text).unwrap_or_else(|| "(dry-run)".into()),
-                        created: false,
-                        added: members,
-                        already: None,
-                    })
-                } else {
-                    // El nombre del otro lado lo escribe el worklist, con la
-                    // regla de siempre: nunca el id solo. Y no es la llave —
-                    // esa es el `key`— asi que cambiarlo no rompe nada.
-                    let nombre = sprint_name(id, title_of(&text).as_deref());
-                    let (key, created) = match sprint_key(&text) {
-                        Some(k) => (k, false),
-                        None => {
-                            let (k, created) = board.create_or_find_sprint(board_id, &nombre)?;
-                            std::fs::write(&path, with_sprint_key(&text, &k)?)?;
-                            crate::commit_all(&tmp, &format!("sprint: {id} -> {k}"))?;
-                            (k, created)
-                        }
-                    };
-                    // Se lee antes para mandar solo lo que falta, no para
-                    // verificar lo que se mando: el codigo de salida de
-                    // `jira-cli` es fiel. El efecto es que volver a correrlo
-                    // cuesta una lectura y cero escrituras.
-                    let adentro = board.sprint_items(board_id, &key)?;
-                    let faltan: Vec<&str> = members
-                        .iter()
-                        .filter(|m| !adentro.contains(m))
-                        .map(|m| m.as_str())
-                        .collect();
-                    if !faltan.is_empty() {
-                        board.add_to_sprint(&key, &faltan)?;
-                    }
-                    Some(SprintResult {
-                        id: id.clone(),
-                        key,
-                        created,
-                        added: faltan.iter().map(|s| s.to_string()).collect(),
-                        already: Some(members.len() - faltan.len()),
-                    })
-                }
-            }
+            Some((id, file)) => Some(resolve_sprint(&tmp, id, file, board, board_id, dry_run)?),
         };
 
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
@@ -407,6 +380,64 @@ pub fn assign_window(
 /// stem con `/`, asi que `_sprints/17.sprint.md` no entra a la pasada 1. Un
 /// sprint del proveedor no es un issue. Ver `concepts/sync.md` seccion "El
 /// sprint viaja como sprint, no como issue".
+/// La pasada 5 sobre **un** sprint: lo crea del otro lado si no esta, le anota
+/// su `key`, y le mete adentro los issues que le falten.
+///
+/// Extraida porque la usan dos: la ventana, donde el sprint es el suyo, y
+/// `bootstrap`, que resuelve los que ninguna ventana cubrio. Un sprint sin
+/// ventana no tenia camino al proveedor —ver la task `ACC-299`— y copiar esto
+/// habria sido la tercera copia de la misma pasada.
+pub(crate) fn resolve_sprint(
+    tmp: &Path,
+    id: &str,
+    file: &str,
+    board: &dyn Board,
+    board_id: &str,
+    dry_run: bool,
+) -> Result<SprintResult> {
+    let path = tmp.join(file);
+    let text = std::fs::read_to_string(&path).with_context(|| format!("leyendo {file}"))?;
+    let members = sprint_members(tmp, &sprint_declared(&text))?;
+    if dry_run {
+        return Ok(SprintResult {
+            id: id.to_string(),
+            key: sprint_key(&text).unwrap_or_else(|| "(dry-run)".into()),
+            created: false,
+            added: members,
+            already: None,
+        });
+    }
+    // El nombre del otro lado lo escribe el worklist, con la regla de siempre:
+    // nunca el id solo. Y no es la llave —esa es el `key`— asi que cambiarlo
+    // no rompe nada.
+    let nombre = sprint_name(id, title_of(&text).as_deref());
+    let (key, created) = match sprint_key(&text) {
+        Some(k) => (k, false),
+        None => {
+            let (k, created) = board.create_or_find_sprint(board_id, &nombre)?;
+            std::fs::write(&path, with_sprint_key(&text, &k)?)?;
+            crate::commit_all(tmp, &format!("sprint: {id} -> {k}"))?;
+            (k, created)
+        }
+    };
+    // Se lee antes para mandar solo lo que falta, no para verificar lo que se
+    // mando: el codigo de salida de `jira-cli` es fiel. El efecto es que volver
+    // a correrlo cuesta una lectura y cero escrituras.
+    let adentro = board.sprint_items(board_id, &key)?;
+    let faltan: Vec<&str> =
+        members.iter().filter(|m| !adentro.contains(m)).map(|m| m.as_str()).collect();
+    if !faltan.is_empty() {
+        board.add_to_sprint(&key, &faltan)?;
+    }
+    Ok(SprintResult {
+        id: id.to_string(),
+        key,
+        created,
+        added: faltan.iter().map(|s| s.to_string()).collect(),
+        already: Some(members.len() - faltan.len()),
+    })
+}
+
 pub fn sprint_file(repo: &Path, rev: &str) -> Result<Option<(String, String)>> {
     let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
     let mut found: Vec<(String, String)> = listing
@@ -642,6 +673,8 @@ pub struct BootstrapResult {
     pub refname: String,
     pub order: Vec<String>,
     pub assigned: Vec<Assigned>,
+    /// Los sprints que no tenian `key`, resueltos al final. Ver `ACC-299`.
+    pub sprints: Vec<SprintResult>,
     pub old_head: String,
     pub new_head: String,
 }
@@ -679,12 +712,14 @@ pub fn bootstrap(
     refname: &str,
     base: &str,
     board: &dyn Board,
+    board_id: &str,
     limit: Option<usize>,
     dry_run: bool,
 ) -> Result<Option<BootstrapResult>> {
     let head = git_output(repo, &["rev-parse", refname])?.trim().to_string();
     let raw = pending_requests(repo, &head)?;
-    if raw.is_empty() {
+    let sprints_pendientes = sprints_sin_key(repo, &head)?;
+    if raw.is_empty() && sprints_pendientes.is_empty() {
         return Ok(None);
     }
 
@@ -700,7 +735,7 @@ pub fn bootstrap(
     // del otro lado, y descartarla al caer solo borra la mitad local. Ver `7k`.
     let mut ancla = Ancla::new(repo, refname, &head, !aca);
 
-    let result = (|| -> Result<(Vec<String>, Vec<Assigned>, String)> {
+    let result = (|| -> Result<(Vec<String>, Vec<Assigned>, Vec<SprintResult>, String)> {
         let mut order = crate::topo_order(&tmp, &slugs)?;
         // El corte va **despues** del orden topologico, no antes: un lote puede
         // dejar una epica creada y sus tasks sin crear —estado valido, porque
@@ -733,14 +768,24 @@ pub fn bootstrap(
                 board.set_description(&a.key, &adf)?;
             }
         }
+
+        // Y los sprints al final: meterles los issues adentro necesita que sus
+        // items ya tengan clave. Es la misma restriccion topologica que ordena
+        // la epica antes que sus tasks, un escalon mas arriba. Ver `ACC-299`.
+        let mut sprints = Vec::new();
+        for (id, file) in &sprints_pendientes {
+            sprints.push(resolve_sprint(&tmp, id, file, board, board_id, dry_run)?);
+            ancla.avanzar(&tmp);
+        }
+
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
-        Ok((order, assigned, new_head))
+        Ok((order, assigned, sprints, new_head))
     })();
 
     if !aca {
         let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
     }
-    let (order, assigned, new_head) = result?;
+    let (order, assigned, sprints, new_head) = result?;
 
     // Parado en la rama, los commits ya la movieron: `update-ref` seria mover
     // dos veces la misma cosa. Y el compare-and-swap parte de donde el ancla
@@ -752,6 +797,7 @@ pub fn bootstrap(
         refname: refname.to_string(),
         order,
         assigned,
+        sprints,
         old_head: head,
         new_head,
     }))

@@ -12,7 +12,7 @@ use worklist::assign::bootstrap;
 const REF: &str = "refs/heads/insecure/all";
 
 fn correr(dir: &std::path::Path, spy: &Spy) -> Option<worklist::assign::BootstrapResult> {
-    bootstrap(dir, REF, "https://x", spy, None, false).unwrap()
+    bootstrap(dir, REF, "https://x", spy, "701", None, false).unwrap()
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn correrlo_de_nuevo_no_encuentra_nada_que_hacer() {
     correr(&r, &spy).unwrap();
     let creados = spy.created.borrow().len();
 
-    assert!(bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().is_none());
+    assert!(bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().is_none());
     assert_eq!(spy.created.borrow().len(), creados, "no le pidio nada mas al proveedor");
 }
 
@@ -148,7 +148,7 @@ fn no_mueve_el_panorama_si_lo_tiene_otro_worktree() {
     common::run(&r, &["worktree", "add", "-q", otro.to_str().unwrap(), "insecure/all"]);
 
     let spy = Spy::default();
-    let err = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap_err().to_string();
+    let err = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap_err().to_string();
     assert!(err.contains("otro worktree"), "tiene que nombrar el problema: {err}");
     assert!(err.contains("otro"), "y donde esta: {err}");
     assert!(spy.created.borrow().is_empty(), "y no le pidio nada al proveedor");
@@ -163,7 +163,7 @@ fn no_corre_sobre_un_arbol_sucio() {
     std::fs::write(r.join("sin-commitear.txt"), "algo").unwrap();
 
     let spy = Spy::default();
-    let err = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap_err().to_string();
+    let err = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap_err().to_string();
     assert!(err.contains("sin commitear"), "{err}");
     assert!(spy.created.borrow().is_empty());
 }
@@ -236,7 +236,7 @@ fn una_corrida_que_se_cae_deja_en_el_panorama_lo_que_alcanzo_a_conseguir() {
     let antes = common::show_tree(&bare, REF);
 
     let board = SeCaeEn { n: std::cell::Cell::new(0), hasta: 2 };
-    let e = bootstrap(&bare, REF, "https://x", &board, None, false).unwrap_err();
+    let e = bootstrap(&bare, REF, "https://x", &board, "701", None, false).unwrap_err();
 
     assert!(e.to_string().contains("fallo por acli"), "se cayó como se esperaba: {e}");
     let despues = common::show_tree(&bare, REF);
@@ -253,16 +253,16 @@ fn limit_crea_los_primeros_y_para_y_la_siguiente_sigue() {
     let r = dir.path().join("repo");
     let spy = Spy::default();
 
-    let uno = bootstrap(&r, REF, "https://x", &spy, Some(2), false).unwrap().unwrap();
+    let uno = bootstrap(&r, REF, "https://x", &spy, "701", Some(2), false).unwrap().unwrap();
     assert_eq!(uno.assigned.len(), 2, "dos y para, de los cuatro");
     assert_eq!(spy.created.borrow().len(), 2, "y sólo dos issues creados");
 
     // Sin marca de progreso: lo que falta es lo que no tiene clave.
-    let dos = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().unwrap();
+    let dos = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
     assert_eq!(dos.assigned.len(), 2, "los dos que quedaban");
     assert_eq!(spy.created.borrow().len(), 4, "cuatro en total, ninguno dos veces");
 
-    assert!(bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().is_none());
+    assert!(bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().is_none());
 }
 
 /// El corte va después del orden topológico: una épica creada con sus tasks
@@ -273,11 +273,11 @@ fn el_corte_respeta_el_orden_y_la_epica_va_en_el_primer_lote() {
     let r = dir.path().join("repo");
     let spy = Spy::default();
 
-    let uno = bootstrap(&r, REF, "https://x", &spy, Some(1), false).unwrap().unwrap();
+    let uno = bootstrap(&r, REF, "https://x", &spy, "701", Some(1), false).unwrap().unwrap();
 
     assert_eq!(uno.assigned[0].slug, "1", "la épica es la primera del orden");
     // Y la task que le cuelga, creada en el lote siguiente, la encuentra puesta.
-    let dos = bootstrap(&r, REF, "https://x", &spy, Some(1), false).unwrap().unwrap();
+    let dos = bootstrap(&r, REF, "https://x", &spy, "701", Some(1), false).unwrap().unwrap();
     assert!(dos.assigned[0].parent.is_some(), "el --parent sale de la épica ya creada");
 }
 
@@ -291,12 +291,12 @@ fn una_epica_que_ya_tiene_clave_sigue_siendo_el_parent_de_sus_tasks() {
     let spy = Spy::default();
 
     // Primer lote: sólo la épica. Queda con clave y fuera de los pedidos.
-    let uno = bootstrap(&r, REF, "https://x", &spy, Some(1), false).unwrap().unwrap();
+    let uno = bootstrap(&r, REF, "https://x", &spy, "701", Some(1), false).unwrap().unwrap();
     let clave_epica = uno.assigned[0].key.clone();
     assert!(common::show_tree(&r, REF).contains(&format!("{clave_epica}.epic.md")));
 
     // Y lo que sigue la nombra igual.
-    let dos = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().unwrap();
+    let dos = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
     for a in &dos.assigned {
         assert_eq!(
             a.parent.as_deref(),
@@ -309,4 +309,36 @@ fn una_epica_que_ya_tiene_clave_sigue_siendo_el_parent_de_sus_tasks() {
     for (_, _, parent) in spy.created.borrow().iter().skip(1) {
         assert_eq!(parent.as_deref(), Some(clave_epica.as_str()));
     }
+}
+
+/// `ACC-299`: un sprint sin ventana no tenía camino al proveedor. El board
+/// mostró 22 sprints en el worklist y 17 en Jira, con el que estaba en curso
+/// entre los que faltaban.
+#[test]
+fn los_sprints_sin_key_tambien_cruzan_y_van_al_final() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    // El árbol trae `1.epic`, `n.user-story`, `o.task` y `q.task`; le pongo un
+    // sprint que nombra a la user story, que entra con su subárbol.
+    common::sprint(&r, "1", "el primero", &["n"], None);
+    common::run(&r, &["add", "-A"]);
+    common::run(&r, &["commit", "-qm", "un sprint sin key"]);
+    let spy = Spy::default();
+
+    let res = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
+
+    assert_eq!(res.sprints.len(), 1, "el sprint sin key también es un pedido");
+    let sp = &res.sprints[0];
+    assert!(sp.created, "no existía del otro lado");
+    assert!(!sp.added.is_empty(), "y le entraron los issues de sus ítems");
+    // Va al final: lo que le mete adentro son claves, que la pasada 1 acaba de
+    // escribir. Si corriera antes, no habría qué meter.
+    for k in &sp.added {
+        assert!(k.starts_with("ACC-"), "entró una clave, no un slug: {k}");
+    }
+    // Y el `key` quedó anotado, así que la segunda corrida no lo vuelve a crear.
+    let sprint_md = common::show(&r, REF, "_sprints/1.sprint.md");
+    assert!(sprint_md.contains(&format!("key: {}", sp.key)), "falta el key:\n{sprint_md}");
+    assert!(bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().is_none());
+    assert_eq!(spy.created_sprints.borrow().len(), 1, "creado una sola vez");
 }

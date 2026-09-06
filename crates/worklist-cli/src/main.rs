@@ -76,6 +76,11 @@ enum Cmd {
     Bootstrap {
         #[arg(long)]
         project: String,
+        /// El board donde viven los sprints. **Obligatorio y sin default**: una
+        /// pasada que se saltea sola porque falta configuracion es la peor
+        /// forma de enterarse de que falta.
+        #[arg(long = "board")]
+        board_id: String,
         /// Sobre que rama. Por defecto el panorama, que es donde vive todo.
         #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
         refname: String,
@@ -194,8 +199,8 @@ fn main() -> Result<()> {
         Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
             cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
         }
-        Cmd::Bootstrap { project, refname, base, limit, dry_run } => {
-            cmd_bootstrap(project, refname, base, limit, dry_run)
+        Cmd::Bootstrap { project, board_id, refname, base, limit, dry_run } => {
+            cmd_bootstrap(project, board_id, refname, base, limit, dry_run)
         }
         Cmd::Reconcile { project, refname, dry_run } => {
             cmd_reconcile(project, refname, dry_run)
@@ -365,6 +370,7 @@ fn cmd_assign_keys(
 /// rechaza al cliente, no al servidor.
 fn cmd_bootstrap(
     project: String,
+    board_id: String,
     refname: String,
     base: String,
     limit: Option<usize>,
@@ -375,7 +381,7 @@ fn cmd_bootstrap(
     }
     let repo = std::env::current_dir()?;
     let board = JiraBoard::new(project);
-    let Some(r) = worklist::assign::bootstrap(&repo, &refname, &base, &board, limit, dry_run)? else {
+    let Some(r) = worklist::assign::bootstrap(&repo, &refname, &base, &board, &board_id, limit, dry_run)? else {
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
     };
@@ -402,6 +408,20 @@ fn cmd_bootstrap(
             (false, false) => "  (ya existia: el cuerpo no se toco)",
         };
         println!("  {} -> {}{}{}{}", a.slug, a.key, refs, padre, como);
+    }
+    for sp in &r.sprints {
+        let como = match (dry_run, sp.created) {
+            (true, _) => String::new(),
+            (false, true) => "  (creado)".into(),
+            (false, false) => "  (ya existia)".into(),
+        };
+        // `already` es `None` en dry-run: no se le pregunto a nadie, y decir
+        // cero seria afirmar sobre el board sin haberlo mirado.
+        let adentro = match sp.already {
+            Some(n) => format!("  ({} adentro, {n} ya estaban)", sp.added.len()),
+            None => format!("  ({} items)", sp.added.len()),
+        };
+        println!("  sprint {} -> {}{}{}", sp.id, sp.key, como, adentro);
     }
     if !dry_run && r.new_head != r.old_head {
         println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
