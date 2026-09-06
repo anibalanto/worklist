@@ -749,6 +749,154 @@ pub fn bootstrap(
     }))
 }
 
+/// Un item que se adopto: existia del otro lado y el panorama no lo sabia.
+#[derive(Debug)]
+pub struct Adopted {
+    pub slug: String,
+    pub key: String,
+    pub rewritten: usize,
+}
+
+/// Un item sin contraparte. **Se nombra, no se cuenta**: quien corre esto esta
+/// reparando, y necesita saber cuales quedaron afuera. Ver
+/// `commands/reconcile.md`.
+#[derive(Debug)]
+pub struct Missing {
+    pub slug: String,
+    pub title: String,
+}
+
+/// Lo que la reconciliacion hizo sobre el panorama.
+#[derive(Debug)]
+pub struct ReconcileResult {
+    pub refname: String,
+    pub adopted: Vec<Adopted>,
+    pub missing: Vec<Missing>,
+    pub old_head: String,
+    pub new_head: String,
+}
+
+/// **Reconciliar**: adoptar los issues que existen del otro lado y el panorama
+/// no registro. Es la pasada 1 de `bootstrap` **sin la creacion**.
+///
+/// Existe separada por una propiedad y no por comodidad: `bootstrap` recupera
+/// lo perdido de paso —`create_or_find` encuentra antes de crear— pero para
+/// recuperar veintitres claves hay que correr el comando que ademas crea
+/// ochenta y seis issues. **Reparar no deberia poder crear**, y la garantia se
+/// sostiene por no haber por donde, no por un flag apagado.
+///
+/// Tampoco escribe nada del otro lado: ni cuerpo, ni `--parent`. Adoptar es
+/// escribir la clave de este lado. Ver `commands/reconcile.md`.
+pub fn reconcile(
+    repo: &Path,
+    refname: &str,
+    board: &dyn Board,
+    dry_run: bool,
+) -> Result<Option<ReconcileResult>> {
+    let head = git_output(repo, &["rev-parse", refname])?.trim().to_string();
+    let raw = pending_requests(repo, &head)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let (aca, tmp) = worktree_para(repo, refname, &head, raw.len(), dry_run)?;
+
+    let slugs: Vec<String> =
+        raw.iter().map(|s| s.split('\t').next().unwrap().to_string()).collect();
+
+    let result = (|| -> Result<(Vec<Adopted>, Vec<Missing>, String)> {
+        // Topologico por lo mismo que en el bootstrap: el renombre de una
+        // epica reescribe lo que cuelga de ella.
+        let order = crate::topo_order(&tmp, &slugs)?;
+        let mut adopted = Vec::new();
+        let mut missing = Vec::new();
+        for slug in &order {
+            let (path, _) = crate::find_file(&tmp, slug)?;
+            let text = std::fs::read_to_string(&path)?;
+            let title = title_of(&text).unwrap_or_else(|| slug.clone());
+            match board.find(&title)? {
+                None => missing.push(Missing { slug: slug.clone(), title }),
+                Some(key) => {
+                    let rewritten = if dry_run {
+                        0
+                    } else {
+                        crate::rename_one(&tmp, slug, &key)?.len()
+                    };
+                    adopted.push(Adopted { slug: slug.clone(), key, rewritten });
+                }
+            }
+        }
+        let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
+        Ok((adopted, missing, new_head))
+    })();
+
+    if !aca {
+        let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    }
+    let (adopted, missing, new_head) = result?;
+
+    if !aca && !dry_run && new_head != head {
+        git_output(repo, &["update-ref", refname, &new_head, &head])?;
+    }
+    Ok(Some(ReconcileResult {
+        refname: refname.to_string(),
+        adopted,
+        missing,
+        old_head: head,
+        new_head,
+    }))
+}
+
+/// Donde se escribe: el arbol de uno si la rama esta checkouteada aca, y un
+/// worktree temporal si no.
+///
+/// **Lo que no se hace es mover una rama que otro worktree tiene abierta**:
+/// `update-ref` la mueve igual y le deja el indice del arbol anterior, y aca
+/// son ciento y pico de renombres. Sobre eso no hay `--force` que valga.
+fn worktree_para(
+    repo: &Path,
+    refname: &str,
+    head: &str,
+    renombres: usize,
+    dry_run: bool,
+) -> Result<(bool, std::path::PathBuf)> {
+    let aca = git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+        == refname;
+    if !aca {
+        if let Some(wt) = crate::checked_out_at(repo, refname) {
+            bail!(
+                "{refname} esta checkouteada en otro worktree y no se puede mover:\n\
+                 \x20 {wt}\n\
+                 \n\
+                 moverla dejaria ese worktree con el indice del arbol anterior, y aca son\n\
+                 {renombres} renombres. Corre esto parado ahi, o saca el worktree primero."
+            );
+        }
+    }
+    // Trabajar en el arbol de uno exige que este limpio: `rename_one` commitea
+    // con `add -A`, asi que lo que hubiera sin commitear se colaria adentro.
+    if aca && !dry_run {
+        let sucio = git_output(repo, &["status", "--porcelain"])?;
+        if !sucio.trim().is_empty() {
+            bail!(
+                "el arbol tiene cambios sin commitear, y el renombre commitea con `add -A`:\n\
+                 \x20 {}\n\
+                 \n\
+                 comitealos o descartalos antes.",
+                sucio.lines().take(3).collect::<Vec<_>>().join("\n  ")
+            );
+        }
+    }
+    if aca {
+        return Ok((true, repo.to_path_buf()));
+    }
+    let tmp = tempdir_path(repo, &format!("reconcile-{refname}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), head])?;
+    Ok((false, tmp))
+}
+
 /// Jira no acepta un nombre de sprint de 30 caracteres o mas.
 pub const SPRINT_NAME_MAX: usize = 29;
 

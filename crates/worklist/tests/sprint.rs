@@ -233,6 +233,9 @@ impl worklist::board::Board for ConBoard {
     ) -> anyhow::Result<worklist::board::Assignment> {
         self.inner.create_or_find(title, item_type, description, parent)
     }
+    fn find(&self, title: &str) -> anyhow::Result<Option<String>> {
+        self.inner.find(title)
+    }
     fn link_relates(&self, a: &str, b: &str) -> anyhow::Result<bool> {
         self.inner.link_relates(a, b)
     }

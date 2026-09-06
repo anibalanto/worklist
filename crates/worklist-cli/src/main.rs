@@ -104,6 +104,21 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Adopta los issues que ya existen del otro lado y el panorama no
+    /// registro. Es la pasada 1 de `bootstrap` **sin la creacion**.
+    ///
+    /// **No puede crear, y no hay flag que lo habilite.** Reparar se corre
+    /// cuando algo salio mal, que es cuando menos se quiere estar decidiendo
+    /// si ademas se va a escribir. Ver `commands/reconcile.md`.
+    Reconcile {
+        #[arg(long)]
+        project: String,
+        /// Sobre que rama. Por defecto el panorama, que es donde vive todo.
+        #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
+        refname: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Busca un issue por titulo antes de crear, para no duplicar en un reintento.
     CreateOrFind {
         #[arg(long)]
@@ -176,6 +191,9 @@ fn main() -> Result<()> {
         }
         Cmd::Bootstrap { project, refname, base, dry_run } => {
             cmd_bootstrap(project, refname, base, dry_run)
+        }
+        Cmd::Reconcile { project, refname, dry_run } => {
+            cmd_reconcile(project, refname, dry_run)
         }
         Cmd::Propagate { stdin, window, all_windows, base, dry_run } => {
             cmd_propagate(stdin, &window, all_windows, &base, dry_run)
@@ -373,6 +391,40 @@ fn cmd_bootstrap(project: String, refname: String, base: String, dry_run: bool) 
             (false, false) => "  (ya existia: el cuerpo no se toco)",
         };
         println!("  {} -> {}{}{}{}", a.slug, a.key, refs, padre, como);
+    }
+    if !dry_run && r.new_head != r.old_head {
+        println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));
+    }
+    Ok(())
+}
+
+/// Adopta lo que ya existe del otro lado, sin crear nada.
+fn cmd_reconcile(project: String, refname: String, dry_run: bool) -> Result<()> {
+    worklist::port::preflight()?;
+    let repo = std::env::current_dir()?;
+    let board = JiraBoard::new(project);
+    let Some(r) = worklist::assign::reconcile(&repo, &refname, &board, dry_run)? else {
+        println!("{refname}: no hay ningun item sin clave");
+        return Ok(());
+    };
+    let verbo = if dry_run { "adoptaria" } else { "adopto" };
+    let total = r.adopted.len() + r.missing.len();
+    println!("{}: {verbo} {} de {total} item(s)", r.refname, r.adopted.len());
+    for a in &r.adopted {
+        let refs = match a.rewritten {
+            0 => String::new(),
+            n => format!("  ({n} refs reescritas)"),
+        };
+        println!("  {} -> {}{}", a.slug, a.key, refs);
+    }
+    // Se nombran uno por uno y no como un total: quien corre esto esta
+    // reparando, y necesita saber cuales quedaron afuera para decidir si es lo
+    // esperado o es otro problema.
+    if !r.missing.is_empty() {
+        println!("  y {} sin issue del otro lado:", r.missing.len());
+        for m in &r.missing {
+            println!("    {}  {}", m.slug, m.title);
+        }
     }
     if !dry_run && r.new_head != r.old_head {
         println!("{}: {} -> {}", r.refname, short(&r.old_head), short(&r.new_head));

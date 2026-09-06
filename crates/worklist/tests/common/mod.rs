@@ -78,6 +78,9 @@ impl Board for Spy {
         ));
         Ok(Assignment::Created(key))
     }
+    fn find(&self, title: &str) -> anyhow::Result<Option<String>> {
+        Ok(self.existing.iter().find(|(t, _)| t == title).map(|(_, k)| k.clone()))
+    }
     fn set_description(&self, key: &str, adf: &str) -> anyhow::Result<()> {
         self.descriptions.borrow_mut().push((key.into(), adf.into()));
         Ok(())

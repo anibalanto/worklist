@@ -48,6 +48,13 @@ pub trait Board {
         description: &str,
         parent: Option<&str>,
     ) -> Result<Assignment>;
+    /// La clave del issue cuyo `summary` es **exactamente** este titulo, si
+    /// existe. **No crea.**
+    ///
+    /// Es la mitad de `create_or_find` que `reconcile` necesita sola: reparar
+    /// se corre cuando algo salio mal, que es cuando menos se quiere estar
+    /// decidiendo si ademas se va a escribir. Ver `commands/reconcile.md`.
+    fn find(&self, title: &str) -> Result<Option<String>>;
     /// `a` se relaciona con `b`. Idempotente, como `link_blocks`.
     fn link_relates(&self, a: &str, b: &str) -> Result<bool>;
     /// Pisa el titulo de un item que ya existe.
@@ -465,6 +472,10 @@ impl Board for JiraBoard {
         }
         self.create(title, jira_type(item_type)?, description, parent)
             .map(Assignment::Created)
+    }
+
+    fn find(&self, title: &str) -> Result<Option<String>> {
+        self.search(title)
     }
 
     fn link_relates(&self, a: &str, b: &str) -> Result<bool> {
