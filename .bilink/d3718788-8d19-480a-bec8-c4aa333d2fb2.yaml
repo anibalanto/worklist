@@ -11,7 +11,7 @@ endpoint:
     link: capture 6491fb38aa0bf8559bd7bc8acc9789aa
     n:
       1:
-        link: capture 4e6801517d360d9d9862c18392b90aae
+        link: capture b08500ef44f53ed3c12fb0412c8884fc
     accepted:
     - agree:
       - test
