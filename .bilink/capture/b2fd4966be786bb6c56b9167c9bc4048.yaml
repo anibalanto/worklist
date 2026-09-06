@@ -1,0 +1,4 @@
+file: crates/worklist-provider/src/assign.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "sprint_members")) @target
