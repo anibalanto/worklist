@@ -12,7 +12,7 @@ endpoint:
     accepted:
     - agree:
       - test
-      link: capture 6305288206973c51dae37373dcbde4f5
+      link: capture bd543a94595f22e219589a9424cdf11a
       hash: 62abbfa8bd7fedf5038d3662c09d9f17f8b006fbcd538e2b8c0b4372153aa071
       hash_ast: 7b6d3722eeab9f1ce2f8c1fb7ba606014883abdbaa4275d335f006282d575db4
       n: declined

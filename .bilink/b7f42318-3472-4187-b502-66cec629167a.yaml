@@ -12,9 +12,9 @@ endpoint:
     accepted:
     - agree:
       - test
-      link: capture 9e67a77979357fa31adb428d37d5d76b
-      hash: d83b4c75bd8326171e600bce9516481c99295e320fe805d4e39f5eebbfbce8fc
-      hash_ast: f88725d9aac4bff1eb456f8788219b66ee415ef6cbb4832038f488a4fc8aa73a
+      link: capture 1980b77bce332bdb36c7bae4ccd2b986
+      hash: 049afd7f68ba836f0d2000de88e68bed6133f39a508c72d42fa2a6560a99fe64
+      hash_ast: 2b9295310facf07c7a4929a207653e4f335d101b4600955021c55ca2c6214304
       n:
         1:
           hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

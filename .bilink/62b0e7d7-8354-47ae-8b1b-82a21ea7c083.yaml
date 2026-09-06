@@ -12,8 +12,11 @@ endpoint:
     accepted:
     - agree:
       - test
-      link: capture 8374fcd86a40ec9ec9468b2832e9b0e9
-      hash: be2b92f036ef91a3c5668519a239b29882f96c1e9f56abeeadd4d9b8f44e9a74
-      hash_ast: 5ef7144af3d337a72f25424081d0b4ef5af3675cc195f659988ad2e8aec52ff3
-      n: declined
+      link: capture b2fd4966be786bb6c56b9167c9bc4048
+      hash: 3cebe71aa4946b9c401723833ec74720f320209880bd3deb7717c700f7d1641f
+      hash_ast: 0d442ea1ce6459d65237be4f9eeb7cd90d7ec5507976e316caadee990f5f0bd4
+      n:
+        1:
+          hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          hash_ast: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     name: la-clausura

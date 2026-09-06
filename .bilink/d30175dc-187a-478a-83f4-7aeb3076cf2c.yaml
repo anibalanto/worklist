@@ -12,8 +12,11 @@ endpoint:
     accepted:
     - agree:
       - test
-      link: capture 82032967c22c928fc2c2e9fdaac6fb80
-      hash: 9688f7a3376ebbb41a5aeaa5d1922118f611316823e462c77d753efcc801b172
-      hash_ast: 248946c76096110fabd9288adbf258289807281491941c139517aa769ff60ec5
-      n: declined
+      link: capture 0084fceeb060058d4d1c05e3155016f6
+      hash: 6bb7b44517880298a2d85840498c8b61709008737ddbc62fd74428a00635dff6
+      hash_ast: ac3eb8a17b70fa8e201d4c36150591c6e5963be35ba342eef2a003dc9cb4d2cd
+      n:
+        1:
+          hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          hash_ast: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     name: cmd_check_push

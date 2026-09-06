@@ -12,8 +12,11 @@ endpoint:
     accepted:
     - agree:
       - test
-      link: capture 7f619e14adf389cbfa36abb8ee778283
-      hash: f4f4028d7119ce9b9786dfb05f507249c9191f370dd546318a35c7012505a8d7
-      hash_ast: b91652e7c1094e76f145a63a798474555873277e466c9cf32e8efd3049893d43
-      n: declined
+      link: capture 29f711c22ac635137046cc9492bb6bf2
+      hash: 31ffd7f420aee3c9e6069adf95d94a00af3a5be8bbbf0c1e56b4589080b4e85f
+      hash_ast: 1daf762327db129154db71ffe6eba98736d2f99d323784e636ad599817b44ce9
+      n:
+        1:
+          hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          hash_ast: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     name: CreateOrFind-arm
