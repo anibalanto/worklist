@@ -269,7 +269,7 @@ fn el_replante_queda_vacio_si_el_trabajo_ya_subio() {
     run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     let tip = head_de(&r, "refs/heads/secure/sprint/10");
-    worklist::propagate::propagate(&r, "refs/heads/secure/sprint/10", &tip, false)
+    worklist::propagate::propagate(&r, "refs/heads/secure/sprint/10", &tip, "https://ejemplo.atlassian.net", false)
         .unwrap()
         .unwrap();
 

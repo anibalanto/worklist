@@ -88,6 +88,10 @@ enum Cmd {
     /// Sube al panorama lo que una ventana resolvio. Corre al final del
     /// `post-receive`, y a mano para reintentar lo que no subio.
     Propagate {
+        /// Base del proveedor: la normalizacion se **rehace** arriba, y
+        /// traducir los links necesita saber contra que host.
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo del hook.
         #[arg(long, conflicts_with_all = ["window", "all_windows"])]
         stdin: bool,
@@ -173,8 +177,8 @@ fn main() -> Result<()> {
         Cmd::Bootstrap { project, refname, base, dry_run } => {
             cmd_bootstrap(project, refname, base, dry_run)
         }
-        Cmd::Propagate { stdin, window, all_windows, dry_run } => {
-            cmd_propagate(stdin, &window, all_windows, dry_run)
+        Cmd::Propagate { stdin, window, all_windows, base, dry_run } => {
+            cmd_propagate(stdin, &window, all_windows, &base, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             cmd_create_or_find(project, r#type, source, titulo, dry_run)
@@ -321,7 +325,7 @@ fn cmd_assign_keys(
         // adelantada del panorama, que es un estado del que se sale
         // reintentando con `worklist propagate`.
         if hay_panorama {
-            match worklist::propagate::propagate(&repo, &r.refname, &r.new_head, dry_run) {
+            match worklist::propagate::propagate(&repo, &r.refname, &r.new_head, &base, dry_run) {
                 Ok(Some(p)) => report_propagated(&p, dry_run),
                 Ok(None) => {}
                 Err(e) => println!("  ! el panorama no avanzo: {e}"),
@@ -380,7 +384,7 @@ fn cmd_bootstrap(project: String, refname: String, base: String, dry_run: bool) 
 ///
 /// **No pide credencial**: la propagacion es entre ramas de git y no habla con
 /// ningun proveedor. Es lo que la deja reintentable cuando el token falta.
-fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, dry_run: bool) -> Result<()> {
+fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, base: &str, dry_run: bool) -> Result<()> {
     let repo = std::env::current_dir()?;
     let lines = if all_windows || !windows.is_empty() {
         window_lines(&repo, windows, all_windows)?
@@ -398,7 +402,7 @@ fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, dry_run: bo
         if classify(&refname) != RefClass::Secure {
             continue;
         }
-        match worklist::propagate::propagate(&repo, &refname, &new, dry_run)? {
+        match worklist::propagate::propagate(&repo, &refname, &new, base, dry_run)? {
             Some(p) => report_propagated(&p, dry_run),
             None => println!("{refname}: el panorama ya tiene todo lo suyo"),
         }
@@ -427,6 +431,12 @@ fn report_propagated(p: &worklist::propagate::Propagated, dry_run: bool) {
             }
             Step::AlreadyRenamed { slug, key } => {
                 println!("  rename {slug} -> {key}  (el panorama ya lo tenia)")
+            }
+            // Y la normalizacion tampoco se copia: su contenido es la
+            // traduccion de los links leida en el arbol de la ventana.
+            Step::Normalized { key } => println!("  normalize: {key}  (rehecho)"),
+            Step::AlreadyNormalized { key } => {
+                println!("  normalize: {key}  (el panorama ya lo tenia)")
             }
         }
     }

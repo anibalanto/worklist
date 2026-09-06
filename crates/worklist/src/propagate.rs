@@ -4,11 +4,13 @@
 //! lo que mas falta arriba son las claves, y las escribe el. Ver
 //! `concepts/propagation.md`.
 //!
-//! **El renombre es el unico que no se copia.** Lleva el `git mv` y la
-//! reescritura de todo lo que nombraba al slug, y esa reescritura recorre el
-//! arbol donde corre: 19 archivos en la ventana, 243 en el panorama. Copiado
-//! tal cual dejaria el archivo movido y las referencias de afuera del recorte
-//! apuntando a un slug que ya no existe. Asi que se rehace.
+//! **Lo que depende del arbol que lo vio no se copia: se rehace.** Son dos, y
+//! por el mismo motivo. El renombre lleva el `git mv` y la reescritura de todo
+//! lo que nombraba al slug, y esa reescritura recorre el arbol donde corre: 19
+//! archivos en la ventana, 243 en el panorama. Y `normalize:` escribe la forma
+//! canonica **traduciendo los links a otros items**, que es leer esos mismos
+//! nombres. Copiados tal cual dejarian las referencias de afuera del recorte
+//! apuntando a un slug que ya no existe.
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -47,6 +49,10 @@ pub enum Step {
     Renamed { slug: String, key: String, rewritten: usize },
     /// Un renombre que el panorama ya tenia hecho: no queda nada que rehacer.
     AlreadyRenamed { slug: String, key: String },
+    /// Una normalizacion, **rehecha** sobre el arbol del panorama.
+    Normalized { key: String },
+    /// La forma canonica del panorama ya coincidia: no quedo nada que escribir.
+    AlreadyNormalized { key: String },
 }
 
 /// Si lo que la ventana traeria entra al panorama.
@@ -114,6 +120,21 @@ fn rename_subject(subject: &str) -> Option<(String, String)> {
         return None;
     }
     Some((slug.to_string(), key.to_string()))
+}
+
+/// La clave de un `normalize: <clave>`, que tampoco se copia.
+///
+/// La pasada 2 escribe la forma canonica **traduciendo los links a otros
+/// items**, y esa traduccion lee los nombres del arbol donde corre. Asi que el
+/// texto que deja es el renombre parcial de la ventana, congelado como
+/// contenido: cherry-pickearlo vuelve a meter lo que el renombre rehecho
+/// acababa de arreglar. Ver `concepts/propagation.md`.
+fn normalize_subject(subject: &str) -> Option<String> {
+    let key = subject.strip_prefix("normalize: ")?.trim();
+    if key.is_empty() || key.contains(' ') {
+        return None;
+    }
+    Some(key.to_string())
 }
 
 /// El commit del corte: el primero que la ventana tiene sobre el panorama.
@@ -206,7 +227,8 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
 
     let mut sobre = panorama;
     for (sha, subject) in &commits {
-        if rename_subject(subject).is_some() {
+        // Los que se rehacen no se prueban: no hay parche que pueda no aplicar.
+        if rename_subject(subject).is_some() || normalize_subject(subject).is_some() {
             continue;
         }
         let base = format!("{sha}^");
@@ -242,7 +264,7 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
 /// avanza**: de `all` se corta todo, asi que un marcador de conflicto escrito
 /// ahi entra en el proximo recorte de cada ventana. La ventana queda
 /// adelantada, que es un estado del que se sale reintentando.
-pub fn propagate(repo: &Path, refname: &str, tip: &str, dry_run: bool) -> Result<Option<Propagated>> {
+pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: bool) -> Result<Option<Propagated>> {
     if tip == crate::check_push::ALL_ZEROS {
         return Ok(None);
     }
@@ -319,36 +341,59 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, dry_run: bool) -> Result
     let result = (|| -> Result<Vec<Step>> {
         let mut steps = Vec::new();
         for (sha, subject) in &commits {
-            match rename_subject(subject) {
-                // El renombre se rehace: su reescritura es del arbol donde
-                // corre, y el panorama tiene un arbol mas grande.
-                Some((slug, key)) => match crate::find_file(&tmp, &slug) {
+            // El renombre se rehace: su reescritura es del arbol donde corre, y
+            // el panorama tiene un arbol mas grande.
+            if let Some((slug, key)) = rename_subject(subject) {
+                match crate::find_file(&tmp, &slug) {
                     Ok(_) => {
                         let touched = crate::rename_one(&tmp, &slug, &key)?;
                         steps.push(Step::Renamed { slug, key, rewritten: touched.len() });
                     }
                     Err(_) => steps.push(Step::AlreadyRenamed { slug, key }),
-                },
-                None => match cherry_pick_one(&tmp, sha)? {
-                    Picked::Applied => {
-                        steps.push(Step::Picked { sha: sha.clone(), subject: subject.clone() })
+                }
+                continue;
+            }
+            // Y la normalizacion tambien, por el mismo motivo: su contenido es
+            // la traduccion de los links leida en el arbol de la ventana. Va
+            // despues del renombre rehecho, que es el que deja los nombres
+            // finales sobre los que esta se recalcula.
+            if let Some(key) = normalize_subject(subject) {
+                match crate::find_file(&tmp, &key) {
+                    Ok((path, _)) => {
+                        let text = std::fs::read_to_string(&path)?;
+                        let (_, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                        if canonical == text {
+                            steps.push(Step::AlreadyNormalized { key });
+                        } else {
+                            std::fs::write(&path, &canonical)?;
+                            crate::commit_all(&tmp, &format!("normalize: {key}"))?;
+                            steps.push(Step::Normalized { key });
+                        }
                     }
-                    Picked::Empty => {
-                        steps.push(Step::Empty { sha: sha.clone(), subject: subject.clone() })
-                    }
-                    Picked::Conflict { files, output } => bail!(
-                        "el panorama no recibe {} {subject}\n\
-                         \x20 choca en: {}\n\
-                         \n\
-                         el panorama no avanzo y la ventana queda adelantada — se reintenta.\n\
-                         Lo que el proveedor arbitra no llega hasta aca: si esto choco, dos\n\
-                         ventanas escribieron algo que el no ve. Ver `concepts/propagation.md`.\n\
-                         \n{}",
-                        &sha[..7.min(sha.len())],
-                        files.join(", "),
-                        output.trim()
-                    ),
-                },
+                    Err(_) => steps.push(Step::AlreadyNormalized { key }),
+                }
+                continue;
+            }
+            match cherry_pick_one(&tmp, sha)? {
+                Picked::Applied => {
+                    steps.push(Step::Picked { sha: sha.clone(), subject: subject.clone() })
+                }
+                Picked::Empty => {
+                    steps.push(Step::Empty { sha: sha.clone(), subject: subject.clone() })
+                }
+                Picked::Conflict { files, output } => bail!(
+                    "el panorama no recibe {} {subject}\n\
+                     \x20 choca en: {}\n\
+                     \x20 contra: {refname}\n\
+                     \n\
+                     el panorama no avanzo y la ventana queda adelantada — se reintenta.\n\
+                     Lo que el proveedor arbitra no llega hasta aca: si esto choco, dos\n\
+                     ventanas escribieron algo que el no ve. Ver `concepts/propagation.md`.\n\
+                     \n{}",
+                    &sha[..7.min(sha.len())],
+                    files.join(", "),
+                    output.trim()
+                ),
             }
         }
         Ok(steps)

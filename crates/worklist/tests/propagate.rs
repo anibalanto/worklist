@@ -5,9 +5,12 @@
 
 mod common;
 
-use common::{item, run, show, sprint, Spy};
+use common::{item, run, show, show_tree, sprint, Spy};
 use std::path::Path;
 use worklist::propagate::{propagate, propagated_ref, Step};
+
+/// Cualquiera sirve: los tests de acá no traducen links a ningún host.
+const BASE: &str = "https://ejemplo.atlassian.net";
 
 fn rev(repo: &Path, refname: &str) -> String {
     let out = std::process::Command::new("git")
@@ -76,7 +79,7 @@ fn el_trabajo_de_la_ventana_sube_y_el_panorama_no_pierde_lo_recortado() {
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
 
     assert_eq!(p.steps.len(), 1, "sube el commit de trabajo y no el corte");
     assert!(show(r, "insecure/all", "o.task.md").contains("editado en la ventana"));
@@ -107,7 +110,7 @@ fn el_renombre_se_rehace_y_corrige_las_referencias_de_afuera_del_recorte() {
     .unwrap();
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
 
     let rehechos: Vec<&Step> =
         p.steps.iter().filter(|s| matches!(s, Step::Renamed { .. })).collect();
@@ -151,10 +154,10 @@ fn propagar_dos_veces_no_hace_nada_la_segunda() {
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+    propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
     let panorama = rev(r, "insecure/all");
 
-    assert!(propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().is_none());
+    assert!(propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().is_none());
     assert_eq!(rev(r, "insecure/all"), panorama, "la segunda no mueve nada");
 }
 
@@ -177,7 +180,7 @@ fn un_choque_no_mueve_el_panorama_ni_la_marca() {
 
     let panorama = rev(r, "insecure/all");
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap_err();
+    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap_err();
 
     let msg = format!("{e:#}");
     assert!(msg.contains("o.task.md"), "el mensaje dice en que archivo choco: {msg}");
@@ -202,7 +205,7 @@ fn sin_el_corte_no_se_propaga_nada() {
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap_err();
+    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap_err();
     assert!(format!("{e:#}").contains("no encuentro el corte"));
 }
 
@@ -259,7 +262,7 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
         worklist::propagate::Verdict::Applies
     ));
     // Y de hecho entra.
-    propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+    propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
     assert!(show(r, "insecure/all", "o.task.md").contains("lo que dice la ventana"));
     assert!(show(r, "insecure/all", "q.task.md").contains("otra cosa"));
 }
@@ -302,7 +305,7 @@ fn desde_afuera_del_panorama_usa_un_worktree_temporal() {
     run(r, &["checkout", "-q", "--detach"]);
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap().unwrap();
+    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
 
     assert_eq!(p.steps.len(), 1);
     assert!(show(r, "insecure/all", "o.task.md").contains("editado en la ventana"));
@@ -329,8 +332,82 @@ fn no_mueve_el_panorama_que_otro_worktree_tiene_abierto() {
 
     let panorama = rev(r, "insecure/all");
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, false).unwrap_err().to_string();
+    let e = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap_err().to_string();
 
     assert!(e.contains("otro worktree"), "{e}");
     assert_eq!(rev(r, "insecure/all"), panorama, "no se movio");
+}
+
+/// La épica cita a sus dos tasks, y cada una entra a un sprint distinto. Es el
+/// caso que separa copiar el `normalize:` de rehacerlo: cada ventana ve una de
+/// las dos citas resuelta y la otra no.
+fn arbol_con_dos_ventanas() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let r = &dir.path().join("repo");
+    std::fs::create_dir(r).unwrap();
+    run(r, &["init", "-q", "-b", "insecure/all"]);
+    run(r, &["config", "user.email", "t@t"]);
+    run(r, &["config", "user.name", "t"]);
+    item_con(
+        r,
+        "1.epic.md",
+        None,
+        "la epica nombra a [`o`](o.task.md) y a [`q`](q.task.md), y ninguna ventana ve las dos",
+    );
+    item(r, "o.task.md", Some("1"));
+    item(r, "q.task.md", Some("1"));
+    sprint(r, "1", "el primero", &["o"], None);
+    sprint(r, "2", "el segundo", &["q"], None);
+    run(r, &["add", "-A"]);
+    run(r, &["commit", "-qm", "arbol"]);
+    dir
+}
+
+/// El caso que hizo caer `propagate --all-windows` sobre el repo real: ocho
+/// ventanas habían normalizado la misma épica, cada una con su renombre
+/// parcial, y el cherry-pick de la segunda chocaba contra la primera.
+#[test]
+fn el_normalize_de_dos_ventanas_sobre_el_mismo_ancestro_no_choca() {
+    let dir = arbol_con_dos_ventanas();
+    let r = &dir.path().join("repo");
+
+    let ramas = ["refs/heads/secure/sprint/1", "refs/heads/secure/sprint/2"];
+
+    // Las dos se cortan **antes** de propagar nada, que es como estaban las 16
+    // del repo real: cada una ve el panorama sin claves, y resuelve la suya.
+    let spy = Spy::default();
+    for (sprint_id, rama) in ["1", "2"].iter().zip(ramas) {
+        worklist::window::open(r, sprint_id, "insecure/all", false, false).unwrap();
+        let tip = rev(r, rama);
+        worklist::assign::assign_window(
+            r,
+            rama,
+            worklist::check_push::ALL_ZEROS,
+            &tip,
+            "https://x",
+            &spy,
+            "701",
+            false,
+        )
+        .unwrap()
+        .unwrap();
+    }
+
+    // Y recién ahora suben. Antes del arreglo la segunda moría acá con
+    // "el panorama no recibe … normalize: ACC-…".
+    for rama in ramas {
+        let tip = rev(r, rama);
+        propagate(r, rama, &tip, BASE, false).unwrap().unwrap();
+    }
+
+    // Y el panorama no se queda con el parcial de ninguna de las dos: las dos
+    // citas quedan resueltas, que es la unión y no una de las mitades.
+    let epica_file = show_tree(r, "insecure/all")
+        .lines()
+        .find(|n| n.ends_with(".epic.md"))
+        .expect("el panorama tiene la epica")
+        .to_string();
+    let epica = show(r, "insecure/all", &epica_file);
+    assert!(!epica.contains("(o.task.md)"), "la cita a `o` quedó sin renombrar:\n{epica}");
+    assert!(!epica.contains("(q.task.md)"), "la cita a `q` quedó sin renombrar:\n{epica}");
 }
