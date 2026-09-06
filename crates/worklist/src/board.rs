@@ -117,12 +117,19 @@ pub trait Board {
 /// |---|---|
 /// | `[ ] ( ) { } ^ "` | la JQL no parsea |
 /// | `*` | parsea y devuelve cero sobre un issue que existe |
+/// | `--` (dos o mas guiones seguidos) | la JQL no parsea |
 ///
-/// **Y nada mas.** Guiones, puntos, barras, `_`, `:`, `#`, `?`, `+`, `&`, `|`,
-/// `!`, `~` y comillas simples estan medidos como seguros, y sacarlos rompe la
+/// **Y nada mas.** Puntos, barras, `_`, `:`, `#`, `?`, `+`, `&`, `|`, `!`, `~`
+/// y comillas simples estan medidos como seguros, y sacarlos rompe la
 /// **tokenizacion**: buscar `bilinker 002 file partition` no encuentra un issue
 /// titulado `bilinker-002-file-partition`, y el reintento lo duplica. Ver la
 /// task `65`.
+///
+/// **El guion es el caso fino, y por eso no alcanzaba una lista de
+/// caracteres.** Uno solo es seguro y hay que conservarlo, por lo de arriba;
+/// dos seguidos rompen el parser. Asi que lo que cae es la **corrida**, no el
+/// caracter: `graph --format json` se busca como `graph format json`, que
+/// tokeniza igual y encuentra, y `bilinker-002` queda intacto.
 ///
 /// La query no tiene que ser precisa —de eso se ocupa `search`, comparando el
 /// `summary` entero— sino **no fallar** y **encontrar**. Y las dos formas de
@@ -135,7 +142,20 @@ pub fn search_text(title: &str) -> String {
     const ROMPEN: [char; 9] = ['[', ']', '(', ')', '{', '}', '^', '"', '*'];
     let mut out = String::with_capacity(title.len());
     let mut space = true;
-    for c in title.chars() {
+    let mut chars = title.chars().peekable();
+    while let Some(c) = chars.next() {
+        // Una corrida de dos o mas guiones cae entera; uno solo se conserva,
+        // porque sacarlo rompe la tokenizacion.
+        if c == '-' && chars.peek() == Some(&'-') {
+            while chars.peek() == Some(&'-') {
+                chars.next();
+            }
+            if !space {
+                out.push(' ');
+                space = true;
+            }
+            continue;
+        }
         if ROMPEN.contains(&c) || c == '\\' {
             if !space {
                 out.push(' ');

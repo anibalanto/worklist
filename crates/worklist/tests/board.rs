@@ -38,6 +38,18 @@ fn corchetes_se_neutralizan_para_la_busqueda() {
     assert!(!search_text("[prueba] algo").contains(']'));
 }
 
+/// Medido contra Jira: `graph --format json` no parsea y `graph -format json`
+/// si. Asi que lo que cae es la corrida de guiones, no el guion — sacarlo
+/// romperia la tokenizacion de `bilinker-002-file-partition`.
+#[test]
+fn dos_guiones_seguidos_caen_y_uno_solo_se_queda() {
+    assert_eq!(search_text("graph --format json"), "graph format json");
+    assert_eq!(search_text("bilinker-002-file-partition"), "bilinker-002-file-partition");
+    assert_eq!(search_text("a --- b"), "a  b", "tres o mas tambien, y el doble espacio es el de siempre");
+    assert_eq!(search_text("El `--no-n1` se ignora"), "El ` no-n1` se ignora", "la corrida deja un espacio, como cualquier caida");
+    assert!(!search_text("Error: `graph --format json` no imprime").contains("--"));
+}
+
 #[test]
 fn dry_run_no_llama_a_acli() {
     // Si esto llamara a un binario real, un entorno sin `acli` en PATH
