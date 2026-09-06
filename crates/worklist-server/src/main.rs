@@ -840,7 +840,14 @@ fn cmd_install_hooks(
     let post = format!(
         "#!/bin/sh\n\
          # generado por worklist-server install-hooks — no editar\n\
+         #\n\
          # La propagacion al panorama va adentro de assign-keys, al final.\n\
+         #\n\
+         # El token llega por el entorno de quien empuja: jira-cli lo lee de\n\
+         # JIRA_API_TOKEN, y un hook hereda el entorno del proceso que lo\n\
+         # dispara — asi que el secreto no vive en disco, y la contra es que un\n\
+         # push desde una sesion sin exportarlo falla en el arranque, diciendo\n\
+         # cual credencial falta.\n\
          exec {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}\n"
     );
 
