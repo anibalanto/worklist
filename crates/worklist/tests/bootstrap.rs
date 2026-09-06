@@ -339,6 +339,54 @@ fn los_sprints_sin_key_tambien_cruzan_y_van_al_final() {
     // Y el `key` quedó anotado, así que la segunda corrida no lo vuelve a crear.
     let sprint_md = common::show(&r, REF, "_sprints/1.sprint.md");
     assert!(sprint_md.contains(&format!("key: {}", sp.key)), "falta el key:\n{sprint_md}");
-    assert!(bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().is_none());
+    // La segunda corrida ya no devuelve `None` —los sprints se reconcilian
+    // siempre— pero no mueve nada: la idempotencia la da la pasada, no el
+    // filtro. Ver `ACC-301`.
+    let otra = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
+    assert!(otra.assigned.is_empty(), "no queda ningun item que pedir");
+    assert!(otra.sprints.iter().all(|s| !s.created && s.added.is_empty()), "y el sprint quieto");
+    assert_eq!(spy.created_sprints.borrow().len(), 1, "creado una sola vez");
+}
+
+/// `ACC-301`: el sprint 20 tenía cinco ítems en el worklist y cuatro en Jira,
+/// porque el quinto entró después de que el sprint cruzara. La clave se pide
+/// una vez; los miembros se reconcilian siempre.
+#[test]
+fn un_sprint_que_ya_cruzo_y_gana_un_item_lo_sube_igual() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    common::sprint(&r, "1", "el primero", &["n"], None);
+    common::run(&r, &["add", "-A"]);
+    common::run(&r, &["commit", "-qm", "un sprint"]);
+    let spy = Spy::default();
+
+    // Primera corrida: el sprint cruza con lo que tenía.
+    let uno = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
+    let key = uno.sprints[0].key.clone();
+    let antes = uno.sprints[0].added.len();
+
+    // Y después gana un ítem, como pasó de verdad.
+    let sp = r.join("_sprints/1.sprint.md");
+    let texto = std::fs::read_to_string(&sp).unwrap();
+    // `q` es la única que el sprint no tenía: `n` entró con su subárbol.
+    let q = uno
+        .assigned
+        .iter()
+        .find(|a| a.slug == "q")
+        .map(|a| a.key.clone())
+        .expect("q cruzó en la primera corrida");
+    std::fs::write(&sp, texto.replace("items: [", &format!("items: [{q}, "))).unwrap();
+    common::run(&r, &["commit", "-aqm", "entra uno mas al sprint"]);
+
+    let dos = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
+
+    let sprint = &dos.sprints[0];
+    assert_eq!(sprint.key, key, "el mismo sprint, no uno nuevo");
+    assert!(!sprint.created, "no se volvió a crear");
+    assert!(
+        sprint.added.contains(&q),
+        "el ítem nuevo tiene que entrar; entraron {:?} (antes {antes})",
+        sprint.added
+    );
     assert_eq!(spy.created_sprints.borrow().len(), 1, "creado una sola vez");
 }

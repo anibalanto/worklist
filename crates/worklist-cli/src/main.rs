@@ -385,6 +385,15 @@ fn cmd_bootstrap(
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
     };
+    // Desde que los sprints se reconcilian siempre, "no habia nada" no se
+    // puede saber antes de preguntar: se dice por lo que paso, no por lo que
+    // el filtro dejo afuera. Ver `ACC-301`.
+    let sprints_quietos =
+        r.sprints.iter().all(|s| !s.created && s.added.is_empty());
+    if !dry_run && r.assigned.is_empty() && sprints_quietos {
+        println!("{}: nada que hacer — todo tiene clave y los sprints estan al dia", r.refname);
+        return Ok(());
+    }
     let verbo = if dry_run { "pediria clave para" } else { "resolvio" };
     println!("{}: {verbo} {} item(s)", r.refname, r.assigned.len());
     for a in &r.assigned {
@@ -410,6 +419,10 @@ fn cmd_bootstrap(
         println!("  {} -> {}{}{}{}", a.slug, a.key, refs, padre, como);
     }
     for sp in &r.sprints {
+        // Un sprint que no movio nada no se lista: la salida es lo que cambio.
+        if !dry_run && !sp.created && sp.added.is_empty() {
+            continue;
+        }
         let como = match (dry_run, sp.created) {
             (true, _) => String::new(),
             (false, true) => "  (creado)".into(),

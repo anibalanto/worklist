@@ -103,22 +103,26 @@ pub fn pending_requests(repo: &Path, rev: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Los sprints que todavia no tienen `key`: `(numero, ruta)`.
+/// Todos los sprints del arbol: `(numero, ruta)`.
 ///
 /// Un sprint no es un issue —se pide con `create_or_find_sprint`— pero uno sin
 /// clave es lo mismo que un item sin clave: algo que el proveedor todavia no
 /// nombra. Dejarlos afuera producia el agujero que el board mostro, con el
 /// sprint en curso entre los que faltaban. Ver `ACC-299`.
-pub fn sprints_sin_key(repo: &Path, rev: &str) -> Result<Vec<(String, String)>> {
+///
+/// **Y se devuelven todos, no solo los que no tienen clave.** Filtrar por eso
+/// trataba al sprint como a un item: una vez que tiene identidad, listo. Pero
+/// un sprint es tambien una **membresia**, y la membresia cambia mientras el
+/// sprint vive — que es lo normal en el que esta en curso. La idempotencia no
+/// la da este filtro sino `resolve_sprint`, que lee que hay adentro y manda
+/// solo lo que falta. Ver `ACC-301`.
+pub fn sprints_del_arbol(repo: &Path, rev: &str) -> Result<Vec<(String, String)>> {
     let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
     let mut out = Vec::new();
     for name in listing.lines() {
         let Some(base) = name.strip_prefix("_sprints/") else { continue };
         let Some(id) = base.strip_suffix(".sprint.md") else { continue };
-        let text = git_output(repo, &["show", &format!("{rev}:{name}")])?;
-        if sprint_key(&text).is_none() {
-            out.push((id.to_string(), name.to_string()));
-        }
+        out.push((id.to_string(), name.to_string()));
     }
     out.sort_by_key(|(id, _)| id.parse::<u32>().unwrap_or(u32::MAX));
     Ok(out)
@@ -718,7 +722,7 @@ pub fn bootstrap(
 ) -> Result<Option<BootstrapResult>> {
     let head = git_output(repo, &["rev-parse", refname])?.trim().to_string();
     let raw = pending_requests(repo, &head)?;
-    let sprints_pendientes = sprints_sin_key(repo, &head)?;
+    let sprints_pendientes = sprints_del_arbol(repo, &head)?;
     if raw.is_empty() && sprints_pendientes.is_empty() {
         return Ok(None);
     }
