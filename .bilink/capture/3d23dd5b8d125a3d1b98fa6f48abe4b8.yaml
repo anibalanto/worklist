@@ -1,0 +1,7 @@
+file: crates/worklist-provider/src/provider.rs
+query: |-
+  (impl_item
+    type: (type_identifier) @n0 (#eq? @n0 "FileProvider")
+    body: (declaration_list
+    (function_item
+    name: (identifier) @n1 (#eq? @n1 "set_status")) @target))
