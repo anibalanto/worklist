@@ -1,0 +1,4 @@
+file: crates/worklist-core/src/lib.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "topo_order")) @target
