@@ -1,0 +1,4 @@
+file: crates/worklist-provider/src/board.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "check_batch")) @target
