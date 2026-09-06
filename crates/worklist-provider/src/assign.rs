@@ -155,13 +155,33 @@ pub fn all_items(repo: &Path, rev: &str) -> Result<Vec<(String, String)>> {
 /// no toca un item no lo re-sube — actualizar uno no puede costar ochenta
 /// llamadas. Ver `concepts/sync.md`.
 ///
+/// **Los borrados no entran**: un item que el push saca del arbol no se
+/// actualiza, se transiciona a `dropped` — ver `dropped_keys`. Meterlo aca
+/// habria hecho que el servidor le re-subiera al proveedor el contenido viejo
+/// de algo que se acaba de sacar.
+///
 /// Con `old` en ceros —una rama nueva— no hay nada que actualizar: todo lo que
 /// trae es un pedido o ya viene resuelto de otra ventana.
 pub fn changed_keys(repo: &Path, old: &str, new_rev: &str) -> Result<Vec<String>> {
+    keys_del_diff(repo, old, new_rev, "ACMRT")
+}
+
+/// Las claves de los items que **este push borra**.
+///
+/// Sacar un item del arbol es proponer su transicion a `dropped`, y eso se lee
+/// del diff sin ningun campo ni lapida: el nombre del archivo borrado da la
+/// clave, y que ya no este en el arbol nuevo da la intencion. Ver
+/// `commands/remove.md`.
+pub fn dropped_keys(repo: &Path, old: &str, new_rev: &str) -> Result<Vec<String>> {
+    keys_del_diff(repo, old, new_rev, "D")
+}
+
+fn keys_del_diff(repo: &Path, old: &str, new_rev: &str, filtro: &str) -> Result<Vec<String>> {
     if old == crate::check_push::ALL_ZEROS || new_rev == crate::check_push::ALL_ZEROS {
         return Ok(Vec::new());
     }
-    let listing = git_output(repo, &["diff", "--name-only", old, new_rev])?;
+    let filtro = format!("--diff-filter={filtro}");
+    let listing = git_output(repo, &["diff", "--name-only", &filtro, old, new_rev])?;
     let mut out = Vec::new();
     for name in listing.lines() {
         if !name.ends_with(".md") || name.contains('/') {
@@ -193,6 +213,68 @@ fn split_item_name(name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+/// Lo que paso con cada estado que el push proponia mover.
+pub struct EstadoMovido {
+    pub key: String,
+    pub destino: String,
+    pub resultado: crate::board::Transicion,
+}
+
+/// Mueve los estados que este push propone, **despues** de que el push entro.
+///
+/// Es una pasada aparte de las cinco de `assign_window` por dos razones que se
+/// suman: no necesita el worktree —lee dos arboles de git y habla con el
+/// board— y **falla distinto**. Las otras pasadas escriben; esta pide, y el
+/// workflow puede negarse.
+///
+/// La negativa normal ya se cazo en el `pre-receive`, que rechaza el push antes
+/// de aceptarlo. La que llega aca es la que el workflow no admitia **al momento
+/// de aplicar**: el board pudo cambiar entre un paso y el otro, y ahi el estado
+/// local y el del proveedor quedan divergiendo — que es exactamente lo que el
+/// compare-and-swap del proximo push caza. No se pierde, se pospone.
+pub fn apply_transitions(
+    repo: &Path,
+    old: &str,
+    new_rev: &str,
+    board: &dyn Board,
+    estados: &crate::states::Estados,
+) -> Result<Vec<EstadoMovido>> {
+    let mut out = Vec::new();
+    for (key, _) in crate::check_push::transiciones_propuestas(repo, old, new_rev, estados)? {
+        // El destino completo, no solo su status: la resolucion es lo que
+        // distingue `dropped` de `done` del otro lado.
+        let Some(destino) = destino_de(repo, old, new_rev, &key, estados) else { continue };
+        let resultado = board.transition(&key, &destino)?;
+        out.push(EstadoMovido {
+            key,
+            destino: destino.status().to_string(),
+            resultado,
+        });
+    }
+    Ok(out)
+}
+
+/// El destino de una clave: el de su `status` nuevo, o el de `dropped` si el
+/// push la borro.
+fn destino_de(
+    repo: &Path,
+    old: &str,
+    new_rev: &str,
+    key: &str,
+    estados: &crate::states::Estados,
+) -> Option<crate::states::Destino> {
+    if dropped_keys(repo, old, new_rev).ok()?.iter().any(|k| k == key) {
+        return estados.destino(crate::states::DESCARTADO).cloned();
+    }
+    let file = git_output(repo, &["ls-tree", "-r", "--name-only", new_rev])
+        .ok()?
+        .lines()
+        .find(|n| crate::provider::key_of_filename(n).as_deref() == Some(key))?
+        .to_string();
+    let text = git_output(repo, &["show", &format!("{new_rev}:{file}")]).ok()?;
+    estados.destino(&crate::provider::status_of(&text)?).cloned()
 }
 
 /// Resuelve una ventana entera. Devuelve `None` si no habia pedidos.
@@ -330,8 +412,11 @@ pub fn assign_window(
                     continue;
                 }
                 let Ok((path, _)) = worklist_core::find_file(&tmp, key) else {
-                    // Se borro en este mismo push: no hay cuerpo que subir, y
-                    // borrar el issue no es de este comando.
+                    // Ya no deberia pasar: `changed_keys` deja los borrados
+                    // afuera, y esos van por `apply_transitions` a `dropped`.
+                    // Queda como red: leer el archivo del arbol viejo para
+                    // re-subirle al proveedor el cuerpo de algo que se acaba de
+                    // sacar seria peor que no hacer nada.
                     continue;
                 };
                 let text = std::fs::read_to_string(&path)?;

@@ -257,6 +257,13 @@ impl worklist_provider::board::Board for ConBoard {
     fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<usize> {
         self.inner.add_to_sprint(sprint, keys)
     }
+    fn transition(
+        &self,
+        key: &str,
+        destino: &worklist_provider::states::Destino,
+    ) -> anyhow::Result<worklist_provider::board::Transicion> {
+        self.inner.transition(key, destino)
+    }
     fn create_or_find_sprint(&self, board: &str, name: &str) -> anyhow::Result<(String, bool)> {
         self.boards.borrow_mut().push(board.into());
         self.inner.create_or_find_sprint(board, name)

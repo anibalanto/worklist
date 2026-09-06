@@ -8,6 +8,7 @@
 //! binario del cliente no tenga con que escribir en el proveedor. Ver
 //! `concepts/distribution.md`.
 
+pub mod states;
 pub mod body;
 pub mod git;
 pub mod window;
@@ -29,6 +30,29 @@ pub fn find_file(repo: &Path, slug: &str) -> Result<(PathBuf, String)> {
         }
     }
     Err(anyhow!("no existe {slug}.<tipo>.md en {}", repo.display()))
+}
+
+/// Los archivos de los items que declaran a `id` como `parent`.
+///
+/// **Los hijos se calculan**: no hay lista que mantener, porque una lista
+/// escrita obligaria a editar dos lugares para recolgar un item y las dos
+/// podrian divergir. Ver `concepts/item.md` seccion "Jerarquia".
+pub fn hijos_de(repo: &Path, id: &str) -> Vec<String> {
+    let re = Regex::new(&format!(r"(?m)^parent:\s*{}\s*$", regex::escape(id))).unwrap();
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(repo) else { return out };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+        if re.is_match(&text) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Un id local lleva la marca `@` adelante; lo que no la lleva es del

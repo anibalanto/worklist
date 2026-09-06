@@ -26,6 +26,11 @@ enum Cmd {
         /// El proveedor real, por `acli`. Informa status, titulo y cuerpo.
         #[arg(long, conflicts_with = "provider_file")]
         project: Option<String>,
+        /// El mapeo de estados de esta instalacion, en JSON. **Obligatorio con
+        /// `--project`**: el status del worklist y el de Jira no son el mismo
+        /// campo, y compararlos sin traducir rechaza todas las ventanas.
+        #[arg(long)]
+        states_map: Option<PathBuf>,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo de pre-receive.
         #[arg(long)]
         stdin: bool,
@@ -49,6 +54,12 @@ enum Cmd {
         /// Base del proveedor, para traducir los links a otros items.
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
+        /// El mapeo de estados de esta instalacion, en JSON. Sin el, los
+        /// estados no viajan: no hay con que traducirlos, y **no viajar es
+        /// mejor que viajar mal**. Se avisa, no se falla — el resto de las
+        /// pasadas si puede correr.
+        #[arg(long)]
+        states_map: Option<PathBuf>,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo del hook.
         #[arg(long, conflicts_with_all = ["window", "all_windows"])]
         stdin: bool,
@@ -137,13 +148,18 @@ enum Cmd {
         /// configuracion es la peor forma de enterarse de que falta.
         #[arg(long = "board")]
         board_id: String,
-        /// El proveedor **de prueba** para el `pre-receive`. Sin el, el
-        /// compare-and-swap se instala contra el real — y contra el real
-        /// rechaza TODAS las ventanas, porque el `status` del worklist y el del
-        /// proveedor no son el mismo campo. Mientras ese mapeo no exista, esta
-        /// es la configuracion de la instalacion y no una opcion de desarrollo.
+        /// El proveedor **de prueba** para el `pre-receive`. Su archivo lleva
+        /// valores con la forma del worklist, asi que su mapeo de estados es la
+        /// identidad y no necesita `--states-map`.
         #[arg(long)]
         provider_file: Option<PathBuf>,
+        /// El mapeo de estados de esta instalacion. **Es lo que permite
+        /// instalar contra el proveedor real**: sin el, el `status` del
+        /// worklist y el de Jira se comparan crudos y rechazan todas las
+        /// ventanas. Va a los dos hooks, porque los dos lo necesitan — uno para
+        /// comparar y el otro para mover. Ver `concepts/states.md`.
+        #[arg(long)]
+        states_map: Option<PathBuf>,
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
         /// Sobrescribe un hook que ya existe.
@@ -180,8 +196,8 @@ enum ProviderCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::CheckPush { provider_file, project, stdin } => {
-            cmd_check_push(provider_file, project, stdin)
+        Cmd::CheckPush { provider_file, project, states_map, stdin } => {
+            cmd_check_push(provider_file, project, states_map, stdin)
         }
         Cmd::Provider { sub: ProviderCmd::SetStatus { provider_file, clave, status } } => {
             let provider = FileProvider::new(provider_file);
@@ -192,8 +208,8 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
-            cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
+        Cmd::AssignKeys { project, board, base, states_map, stdin, window, all_windows, dry_run } => {
+            cmd_assign_keys(project, board, base, states_map, stdin, &window, all_windows, dry_run)
         }
         Cmd::Bootstrap { project, board_id, refname, base, limit, dry_run } => {
             cmd_bootstrap(project, board_id, refname, base, limit, dry_run)
@@ -204,8 +220,26 @@ fn main() -> Result<()> {
         Cmd::Propagate { stdin, window, all_windows, base, dry_run } => {
             cmd_propagate(stdin, &window, all_windows, &base, dry_run)
         }
-        Cmd::InstallHooks { repo, project, board_id, provider_file, base, force, dry_run } => {
-            cmd_install_hooks(&repo, &project, &board_id, provider_file.as_deref(), &base, force, dry_run)
+        Cmd::InstallHooks {
+            repo,
+            project,
+            board_id,
+            provider_file,
+            states_map,
+            base,
+            force,
+            dry_run,
+        } => {
+            cmd_install_hooks(
+                &repo,
+                &project,
+                &board_id,
+                provider_file.as_deref(),
+                states_map.as_deref(),
+                &base,
+                force,
+                dry_run,
+            )
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             cmd_create_or_find(project, r#type, source, titulo, dry_run)
@@ -245,6 +279,7 @@ fn cmd_assign_keys(
     project: String,
     board_id: String,
     base: String,
+    states_map: Option<PathBuf>,
     stdin: bool,
     windows: &[String],
     all_windows: bool,
@@ -266,6 +301,22 @@ fn cmd_assign_keys(
     };
     // Una vez, antes del lote: que falte el panorama es del repo, no de cada
     // ventana. Ver la task `77`.
+    // El mapeo de estados, si esta. Sin el, la pasada de estados no corre —
+    // ver el flag. El vocabulario sale del panorama, como en `check-push`.
+    let estados = match &states_map {
+        Some(f) => {
+            let vocabulario =
+                worklist_provider::states::vocabulario(states_del_panorama(&repo).as_deref());
+            Some(worklist_provider::states::Estados::new(
+                &vocabulario,
+                worklist_provider::states::mapeo_de_archivo(f)?,
+            )?)
+        }
+        None => {
+            println!("aviso: sin --states-map los estados no viajan al proveedor");
+            None
+        }
+    };
     let hay_panorama = worklist_provider::propagate::has_panorama(&repo);
     if !hay_panorama {
         println!(
@@ -306,6 +357,33 @@ fn cmd_assign_keys(
                     a.key,
                     a.parent.as_deref().unwrap_or("?")
                 );
+            }
+        }
+        // Los estados que este push proponia mover. Va **despues** de las
+        // cinco pasadas: mover un estado no depende de ninguna, y fallar aca no
+        // tiene que dejar a medias lo que si se pudo hacer.
+        if let Some(estados) = &estados {
+            if !dry_run {
+                for m in worklist_provider::assign::apply_transitions(
+                    &repo, &old, &new, &board, estados,
+                )? {
+                    match m.resultado {
+                        worklist_provider::board::Transicion::Hecha => {
+                            println!("  estado: {} -> {}", m.key, m.destino)
+                        }
+                        worklist_provider::board::Transicion::YaEstaba => {}
+                        worklist_provider::board::Transicion::Rechazada { motivo, disponibles } => {
+                            println!("  estado: {} NO se movio a {} — {motivo}", m.key, m.destino);
+                            match disponibles {
+                                Some(d) if !d.is_empty() => {
+                                    println!("          disponibles: {}", d.join(", "))
+                                }
+                                Some(_) => println!("          el workflow no ofrece ninguna"),
+                                None => println!("          no se pudieron listar las disponibles"),
+                            }
+                        }
+                    }
+                }
             }
         }
         for (blocker, blocked) in &r.linked {
@@ -639,13 +717,28 @@ fn read_hook_lines(repo: &std::path::Path, stdin: bool) -> Result<Vec<(String, S
     Ok(out)
 }
 
+/// El `.metadata/states.yaml` del panorama, si el repo lo tiene.
+///
+/// **Se lee del panorama y no de la ventana que llega**: el vocabulario es del
+/// proyecto entero, y un recorte lleva los items de su sprint y nada mas. Sin
+/// archivo devuelve `None`, y ahi vale el vocabulario por defecto.
+fn states_del_panorama(repo: &std::path::Path) -> Option<String> {
+    let out = worklist_core::git_command(repo)
+        .args(["show", &format!("{}:.metadata/states.yaml", worklist_core::git::PANORAMA)])
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 fn cmd_check_push(
     provider_file: Option<PathBuf>,
     project: Option<String>,
+    states_map: Option<PathBuf>,
     stdin: bool,
 ) -> Result<()> {
     // Uno de los dos, y el de prueba solo informa el status: con el, el cuerpo
     // y el titulo no se comparan. Ver `concepts/sync.md`.
+    let real = project.is_some();
     let provider: Box<dyn worklist_provider::provider::Provider> = match (provider_file, project) {
         (Some(f), None) => Box::new(FileProvider::new(f)),
         (None, Some(p)) => {
@@ -656,6 +749,27 @@ fn cmd_check_push(
     };
     let provider = provider.as_ref();
     let repo = std::env::current_dir()?;
+
+    // El vocabulario sale del panorama y el mapeo de la instalacion. Ver
+    // `concepts/states.md` § "El vocabulario está en git; el mapeo, en la
+    // instalación".
+    let vocabulario = worklist_provider::states::vocabulario(states_del_panorama(&repo).as_deref());
+    let estados = match states_map {
+        Some(f) => {
+            worklist_provider::states::Estados::new(
+                &vocabulario,
+                worklist_provider::states::mapeo_de_archivo(&f)?,
+            )?
+        }
+        // El de prueba lleva valores con la forma del worklist, asi que su
+        // mapeo **es** la identidad. Con eso la comparacion siempre traduce y
+        // no hay una rama sin mapeo que se comporte distinto.
+        None if !real => worklist_provider::states::Estados::identidad(&vocabulario),
+        None => anyhow::bail!(
+            "--project necesita --states-map: el status del worklist y el del proveedor no son \
+             el mismo campo, y compararlos sin traducir rechaza todas las ventanas"
+        ),
+    };
 
     // El unico momento en que el cliente y el servidor se hablan, asi que es el
     // unico lugar donde una diferencia de version se puede notar sin ir a
@@ -691,9 +805,24 @@ fn cmd_check_push(
             println!("        Recorta una ventana segura (secure/…) y empuja ahi.");
             continue;
         }
-        let rejected = check_one(&repo, &old, &new, &refname, provider)?;
+        let rejected = check_one(&repo, &old, &new, &refname, provider, &estados)?;
         for r in rejected {
             any_rejected = true;
+            // Un rechazo por regla se lee distinto de uno por deriva, porque
+            // lo que hay que hacer es distinto: el primero no se arregla
+            // reintentando. Ver `concepts/states.md`.
+            if r.field == "transicion" {
+                println!(
+                    "reject: {} no se puede mover a \"{}\" — {}",
+                    r.key, r.tip_status, r.live_status
+                );
+                match &r.disponibles {
+                    Some(d) if !d.is_empty() => println!("        disponibles: {}", d.join(", ")),
+                    Some(_) => println!("        el workflow no ofrece ninguna transicion"),
+                    None => println!("        no se pudieron listar las disponibles"),
+                }
+                continue;
+            }
             println!(
                 "reject: {} {} era \"{}\" en el tip, el proveedor dice \"{}\"",
                 r.key, r.field, r.tip_status, r.live_status
@@ -799,6 +928,7 @@ fn cmd_install_hooks(
     project: &str,
     board_id: &str,
     provider_file: Option<&std::path::Path>,
+    states_map: Option<&std::path::Path>,
     base: &str,
     force: bool,
     dry_run: bool,
@@ -813,21 +943,29 @@ fn cmd_install_hooks(
         anyhow::bail!("{} no tiene hooks/: no es un bare", repo.display());
     }
 
-    // Con el proveedor real el compare-and-swap rechaza todas las ventanas: el
-    // `status` del worklist y el del proveedor no son el mismo campo. Mientras
-    // ese mapeo no exista, la instalacion corre contra el de prueba. Ver
-    // `commands/install-hooks.md` § "Con que proveedor queda el pre-receive".
+    // El `status` del worklist y el del proveedor no son el mismo campo, asi
+    // que contra el real hace falta el mapeo — sin el, `check-push --project`
+    // se niega a arrancar en vez de rechazar todas las ventanas. Ver
+    // `concepts/states.md` y `commands/install-hooks.md`.
+    let mapeo = match states_map {
+        Some(f) => format!(" --states-map {}", f.display()),
+        None => String::new(),
+    };
     let contra = match provider_file {
         Some(f) => format!("--provider-file {}", f.display()),
-        None => format!("--project {project}"),
+        None => format!("--project {project}{mapeo}"),
     };
-    let nota = match provider_file {
-        Some(_) => concat!(
-            "# Contra el proveedor de prueba: con el real, el status del worklist\n",
-            "# y el de Jira no son el mismo campo, y el compare-and-swap rechaza\n",
-            "# todas las ventanas de entrada.\n",
+    let nota = match (provider_file, states_map) {
+        (Some(_), _) => concat!(
+            "# Contra el proveedor de prueba: su archivo lleva valores con la\n",
+            "# forma del worklist, asi que su mapeo de estados es la identidad.\n",
         ),
-        None => "",
+        (None, None) => concat!(
+            "# Sin --states-map, y contra el proveedor real: check-push se va a\n",
+            "# negar a arrancar. El status del worklist y el de Jira no son el\n",
+            "# mismo campo, y compararlos sin traducir rechaza todas las ventanas.\n",
+        ),
+        (None, Some(_)) => "",
     };
     let pre = format!(
         "#!/bin/sh\n\
@@ -848,7 +986,7 @@ fn cmd_install_hooks(
          # dispara — asi que el secreto no vive en disco, y la contra es que un\n\
          # push desde una sesion sin exportarlo falla en el arranque, diciendo\n\
          # cual credencial falta.\n\
-         exec {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}\n"
+         exec {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}{mapeo}\n"
     );
 
     for (name, body) in [("pre-receive", &pre), ("post-receive", &post)] {

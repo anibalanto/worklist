@@ -13,7 +13,8 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
-use worklist_provider::board::{Assignment, Board};
+use worklist_provider::board::{Assignment, Board, Transicion};
+use worklist_provider::states::Destino;
 
 pub fn run(repo: &Path, args: &[&str]) {
     let st = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
@@ -57,6 +58,11 @@ pub struct Spy {
     pub created_sprints: RefCell<Vec<String>>,
     /// Que issues tiene cada sprint del board, por id.
     pub inside: RefCell<Vec<(String, Vec<String>)>>,
+    /// `(clave, status, resolucion)` de las transiciones pedidas.
+    pub transitions: RefCell<Vec<(String, String, Option<String>)>>,
+    /// Las claves cuya transicion el "workflow" rechaza, para poder ejercer
+    /// el rechazo por regla — que es una respuesta y no una falla.
+    pub rechaza: Vec<String>,
 }
 
 impl Board for Spy {
@@ -124,6 +130,20 @@ impl Board for Spy {
             None => inside.push((sprint.into(), keys.iter().map(|k| k.to_string()).collect())),
         }
         Ok(keys.len())
+    }
+    fn transition(&self, key: &str, destino: &Destino) -> anyhow::Result<Transicion> {
+        if self.rechaza.iter().any(|k| k == key) {
+            return Ok(Transicion::Rechazada {
+                motivo: format!("\"{}\" no es una transicion de este workflow", destino.status()),
+                disponibles: Some(vec!["Ready for Review".into()]),
+            });
+        }
+        self.transitions.borrow_mut().push((
+            key.into(),
+            destino.status().into(),
+            destino.resolution().map(|r| r.to_string()),
+        ));
+        Ok(Transicion::Hecha)
     }
     fn create_or_find_sprint(&self, _board: &str, name: &str) -> anyhow::Result<(String, bool)> {
         if let Some((_, id)) = self.board.borrow().iter().find(|(n, _)| n == name) {

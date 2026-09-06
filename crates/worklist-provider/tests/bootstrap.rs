@@ -211,6 +211,13 @@ impl worklist_provider::board::Board for SeCaeEn {
     fn set_parent(&self, _k: &str, _e: &str) -> anyhow::Result<bool> {
         Ok(false)
     }
+    fn transition(
+        &self,
+        _k: &str,
+        _d: &worklist_provider::states::Destino,
+    ) -> anyhow::Result<worklist_provider::board::Transicion> {
+        Ok(worklist_provider::board::Transicion::Hecha)
+    }
     fn create_or_find_sprint(&self, _b: &str, _n: &str) -> anyhow::Result<(String, bool)> {
         Ok(("1".into(), false))
     }

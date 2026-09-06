@@ -66,6 +66,14 @@ pub enum Op {
     /// Que issues tiene un sprint. Se lee **antes** de agregar, para mandar
     /// solo los que faltan.
     SprintItems,
+    /// Mover un issue de estado. **No es una escritura**: el workflow del board
+    /// decide si esa transicion es legal, y puede negarse. Ver
+    /// `concepts/states.md`.
+    Transition,
+    /// Las transiciones que el workflow admite hoy para un issue. Se pide
+    /// **solo cuando una fue rechazada**: un rechazo que no dice cuales si se
+    /// puede no informo nada.
+    TransitionsOf,
 }
 
 impl Op {
@@ -82,7 +90,9 @@ impl Op {
             | Op::Snapshot
             | Op::ParentOf
             | Op::CreateSprint
-            | Op::SprintItems => Transport::Acli,
+            | Op::SprintItems
+            | Op::Transition
+            | Op::TransitionsOf => Transport::Acli,
             Op::SetParent | Op::AddToSprint | Op::SprintList => Transport::JiraCli,
         }
     }
@@ -101,6 +111,8 @@ impl Op {
             Op::CreateSprint => "crear el sprint",
             Op::SprintList => "listar los sprints del board",
             Op::SprintItems => "leer los issues del sprint",
+            Op::Transition => "mover de estado",
+            Op::TransitionsOf => "listar las transiciones disponibles",
         }
     }
 }

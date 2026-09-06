@@ -9,16 +9,23 @@
 //! pisarlo. Ver `concepts/sync.md`.
 
 use crate::provider::{key_of_filename, status_of, Provider};
+use crate::states::Estados;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
 pub struct RejectedKey {
     pub key: String,
-    /// Que campo difiere: `status`, `titulo` o `cuerpo`.
+    /// Que campo difiere: `status`, `titulo`, `cuerpo` — o `transicion`, que no
+    /// es un campo que difiere sino una regla del workflow que no se cumple.
     pub field: &'static str,
     pub tip_status: String,
     pub live_status: String,
+    /// Las transiciones que el workflow si admite. Solo en un rechazo por
+    /// regla, y **`None` es "no se pudieron listar"**: un rechazo que no dice
+    /// cuales si se puede no informo nada, pero inventar una lista vacia seria
+    /// afirmar sobre el board sin mirarlo.
+    pub disponibles: Option<Vec<String>>,
 }
 
 pub const ALL_ZEROS: &str = "0000000000000000000000000000000000000000";
@@ -81,6 +88,7 @@ pub fn check_one(
     new: &str,
     refname: &str,
     provider: &dyn Provider,
+    estados: &Estados,
 ) -> Result<Vec<RejectedKey>> {
     // `old` en ceros es una rama que nace: no habia creencia previa que
     // comparar. `new` en ceros es un **borrado**, y borrar una rama no escribe
@@ -97,15 +105,43 @@ pub fn check_one(
     let live = provider.snapshot(&keys)?;
 
     // El `status`, sobre todas: la rama promete verificarse entera.
+    //
+    // Y se compara **traducido**: el del tip esta en el vocabulario del
+    // proyecto y el del proveedor en el suyo, asi que compararlos crudos
+    // rechaza TODAS las ventanas — que es lo que tenia a la instalacion
+    // apuntando al proveedor de prueba. El de prueba recibe el mapeo identidad,
+    // asi que aca no hay rama sin traducir. Ver `concepts/states.md`.
     let mut out: Vec<RejectedKey> = beliefs
         .iter()
         .filter_map(|(key, tip_status)| {
+            // `None` en el status del proveedor es "no lo informa", que no es
+            // lo mismo que vacio: no hay nada contra que comparar.
             let live_status = live.get(key)?.status.as_ref()?;
-            (live_status != tip_status).then(|| RejectedKey {
+            // Un status que el vocabulario no declara **se rechaza**, no se
+            // saltea: no poder traducirlo es no poder decir nada sobre ese
+            // item, y callar seria confundirlo con "esta bien".
+            let Some(destino) = estados.destino(tip_status) else {
+                return Some(RejectedKey {
+                    key: key.clone(),
+                    field: "status",
+                    tip_status: format!("{tip_status} (no esta en el vocabulario)"),
+                    live_status: live_status.clone(),
+                    disponibles: None,
+                });
+            };
+            let esperado = destino.status();
+            (live_status != esperado).then(|| RejectedKey {
                 key: key.clone(),
                 field: "status",
-                tip_status: tip_status.clone(),
+                // La traduccion se muestra **solo cuando dice algo**: con el
+                // mapeo identidad, `open (open)` es ruido que tapa el dato.
+                tip_status: if esperado == tip_status {
+                    tip_status.clone()
+                } else {
+                    format!("{tip_status} ({esperado})")
+                },
                 live_status: live_status.clone(),
+                disponibles: None,
             })
         })
         .collect();
@@ -125,6 +161,7 @@ pub fn check_one(
                         field: "titulo",
                         tip_status: tip_title,
                         live_status: live_title.clone(),
+                        disponibles: None,
                     });
                     continue;
                 }
@@ -142,12 +179,75 @@ pub fn check_one(
                     field: "cuerpo",
                     tip_status: "el del tip".into(),
                     live_status: "otro en el proveedor".into(),
+                    disponibles: None,
                 });
             }
         }
     }
 
+    // ── La transicion propuesta.
+    //
+    // **Es lo unico de este archivo que mira lo que trae el push**, y no
+    // contradice al compare-and-swap: es otra pregunta. Aquel verifica que la
+    // rama siga siendo consistente; esta, que lo que se pide sea legal en el
+    // workflow. Un rechazo por regla no se arregla reintentando, asi que tiene
+    // que llegar **antes** de aceptar el push y no despues.
+    //
+    // El costo es una llamada por item **cuyo status cambia**, no por item de
+    // la ventana: en un push normal son cero o uno.
+    for (key, propuesto) in transiciones_propuestas(repo, old, new, estados)? {
+        let Some(disponibles) = provider.available_transitions(&key)? else { continue };
+        if disponibles.iter().any(|d| d == &propuesto) {
+            continue;
+        }
+        out.push(RejectedKey {
+            key,
+            field: "transicion",
+            tip_status: propuesto,
+            live_status: "el workflow no la admite".into(),
+            disponibles: Some(disponibles),
+        });
+    }
+
     Ok(out)
+}
+
+/// Los `(clave, status del proveedor)` que este push propone mover.
+///
+/// Dos fuentes, y la segunda no lleva ningun campo: un item cuyo `status`
+/// cambio entre los dos arboles, y uno que el push **borra** — sacar un item
+/// del arbol es proponer su transicion a `dropped`. Ver `commands/remove.md`.
+pub fn transiciones_propuestas(
+    repo: &Path,
+    old: &str,
+    new: &str,
+    estados: &Estados,
+) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for key in crate::assign::changed_keys(repo, old, new)? {
+        let (Some(antes), Some(ahora)) = (status_en(repo, old, &key), status_en(repo, new, &key))
+        else {
+            continue;
+        };
+        if antes == ahora {
+            continue;
+        }
+        if let Some(d) = estados.destino(&ahora) {
+            out.push((key, d.status().to_string()));
+        }
+    }
+    for key in crate::assign::dropped_keys(repo, old, new)? {
+        if let Some(d) = estados.destino(crate::states::DESCARTADO) {
+            out.push((key, d.status().to_string()));
+        }
+    }
+    Ok(out)
+}
+
+fn status_en(repo: &Path, rev: &str, key: &str) -> Option<String> {
+    let file = file_of(repo, rev, key).ok()?;
+    let text = git_output(repo, &["show", &format!("{rev}:{file}")]).ok()?;
+    status_of(&text)
 }
 
 /// El archivo de `key` en `rev`, con su tipo.

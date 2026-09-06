@@ -31,6 +31,27 @@ impl Assignment {
     }
 }
 
+/// Lo que paso con una transicion pedida.
+///
+/// **`Rechazada` no es un error**: una transicion ilegal es una respuesta del
+/// workflow, no una falla del transporte, y reintentarla la vuelve a rechazar
+/// para siempre. Quien llama tiene que poder distinguirla de un rechazo por
+/// deriva. Ver `concepts/states.md` seccion "Y hay dos formas de rechazo".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transicion {
+    Hecha,
+    /// Ya estaba en ese estado. Pedirla de nuevo no es un error.
+    YaEstaba,
+    Rechazada {
+        motivo: String,
+        /// Las que el workflow si admite. **`None` es "no se pudieron
+        /// listar"**, que no es lo mismo que "no hay ninguna": informar cero
+        /// disponibles sin haber podido preguntar seria afirmar sobre el board
+        /// sin mirarlo.
+        disponibles: Option<Vec<String>>,
+    },
+}
+
 pub trait Board {
     /// La clave del item, creandolo si no existe. `parent` es la clave de su
     /// **epica ancestro**, no la de su padre directo: Jira no admite `parent`
@@ -99,6 +120,13 @@ pub trait Board {
     /// clave, y el reintento lo duplicaria. Ver `concepts/sync.md` seccion "Se
     /// busca por nombre exactamente cuando no hay `key`".
     fn create_or_find_sprint(&self, board: &str, name: &str) -> Result<(String, bool)>;
+    /// Mueve el issue al estado que el mapeo pide.
+    ///
+    /// **Se pide, no se escribe.** El titulo y el cuerpo pisan el valor viejo y
+    /// no hay nada que discutir; una transicion tiene reglas del otro lado. De
+    /// ahi sale que un cambio de estado sea una propuesta y no un hecho — ver
+    /// `commands/state-change.md`.
+    fn transition(&self, key: &str, destino: &crate::states::Destino) -> Result<Transicion>;
     /// Las claves que el sprint ya tiene adentro.
     ///
     /// **No es una verificacion**: es para mandar solo lo que falta. Lo que se
@@ -368,6 +396,26 @@ impl JiraBoard {
         JiraBoard { project: project.into() }
     }
 
+    /// Las transiciones que el workflow admite hoy para este issue.
+    ///
+    /// Se pide **solo despues de un rechazo**, que es cuando sirve: preguntarla
+    /// siempre seria una llamada por item para un dato que casi nunca se usa.
+    ///
+    /// **Tampoco esta medida contra el board real.** Y por eso su fracaso no se
+    /// traga: quien llama convierte el `Err` en `disponibles: None`, que se
+    /// lee como *"no se pudieron listar"* y no como *"no hay ninguna"*.
+    fn transitions_of(&self, key: &str) -> Result<Vec<String>> {
+        let v = acli_json(
+            Op::TransitionsOf,
+            Some(key),
+            "workitem transitions",
+            &["jira", "workitem", "transitions", "--key", key, "--json"],
+        )?;
+        let mut out = Vec::new();
+        nombres_en(&v, &mut out);
+        Ok(out)
+    }
+
     fn jql(&self, title: &str) -> String {
         format!(
             "project = {} AND summary ~ \"{}\"",
@@ -500,6 +548,43 @@ impl Board for JiraBoard {
 
     fn link_relates(&self, a: &str, b: &str) -> Result<bool> {
         self.link(a, b, "Relates")
+    }
+
+    /// **La forma exacta de esta llamada no esta medida contra el board real.**
+    /// Se escribe con la misma forma que el resto de las escrituras de `acli`
+    /// —`workitem` con `--key` y `--json`— y el dia que se corra contra Jira
+    /// hay que confirmarla, como se confirmo cada una de las otras. Lo que si
+    /// esta decidido es la **forma del resultado**: rechazada no es error.
+    fn transition(&self, key: &str, destino: &crate::states::Destino) -> Result<Transicion> {
+        let mut args: Vec<String> = vec![
+            "jira".into(),
+            "workitem".into(),
+            "transition".into(),
+            "--key".into(),
+            key.into(),
+            "--status".into(),
+            destino.status().into(),
+        ];
+        // La resolucion es lo que distingue `dropped` de `done`: los dos van a
+        // "Done" y en el board se ven distinto solo por este campo.
+        if let Some(r) = destino.resolution() {
+            args.push("--resolution".into());
+            args.push(r.into());
+        }
+        args.push("--yes".into());
+        args.push("--json".into());
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+        match acli_json(Op::Transition, Some(key), "workitem transition", &refs) {
+            Ok(_) => Ok(Transicion::Hecha),
+            // Un fallo de esta operacion es, casi siempre, que el workflow no
+            // admite la transicion — que es una respuesta y no una falla. Se
+            // pregunta cuales si, y con eso el rechazo informa algo accionable.
+            Err(e) => Ok(Transicion::Rechazada {
+                motivo: format!("{e}"),
+                disponibles: self.transitions_of(key).ok(),
+            }),
+        }
     }
 
     fn set_summary(&self, key: &str, title: &str) -> Result<()> {
@@ -654,6 +739,30 @@ const SPRINT_PAGE: &str = "100";
 fn es_clave_de_jira(s: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^[A-Z]+-\d+$").unwrap()).is_match(s)
+}
+
+/// Los `name` que aparezcan en la respuesta, en el orden en que vengan.
+///
+/// Se recorre el arbol en vez de asumir la envoltura, por lo mismo que
+/// `keys_in`: la forma de esta salida no esta medida, y el nombre de una
+/// transicion es lo unico que hace falta.
+pub(crate) fn nombres_en(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, val) in m {
+                if k == "name" {
+                    if let Some(s) = val.as_str() {
+                        if !out.iter().any(|n| n == s) {
+                            out.push(s.to_string());
+                        }
+                    }
+                }
+                nombres_en(val, out);
+            }
+        }
+        serde_json::Value::Array(a) => a.iter().for_each(|x| nombres_en(x, out)),
+        _ => {}
+    }
 }
 
 fn keys_in(v: &serde_json::Value) -> Vec<String> {

@@ -5,6 +5,13 @@ use std::path::Path;
 use std::process::Command;
 use worklist_provider::check_push::check_one;
 use worklist_provider::provider::FileProvider;
+use worklist_provider::states::Estados;
+
+/// El mapeo del proveedor de prueba **es** la identidad: su archivo lleva
+/// valores con la forma del worklist. Ver `concepts/states.md`.
+fn estados() -> Estados {
+    Estados::identidad(&worklist_provider::states::vocabulario(None))
+}
 
 fn run(repo: &Path, args: &[&str]) {
     let status = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
@@ -41,7 +48,7 @@ fn coincide_no_rechaza_nada() {
     let provider = FileProvider::new(&provider_file);
     provider.set_status("ACC-101", "open").unwrap();
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -53,7 +60,7 @@ fn el_proveedor_se_movio_y_se_rechaza() {
     let provider = FileProvider::new(&provider_file);
     provider.set_status("ACC-101", "done").unwrap(); // alguien lo cerro en Jira
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].key, "ACC-101");
     assert_eq!(rejected[0].tip_status, "open");
@@ -67,7 +74,7 @@ fn una_rama_que_no_es_ventana_no_se_chequea() {
     let provider = FileProvider::new(repo.join("provider.json"));
     provider.set_status("ACC-101", "done").unwrap();
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/main", &provider).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/main", &provider, &estados()).unwrap();
     assert!(rejected.is_empty(), "una rama fuera de sprint/* o backlog no se valida");
 }
 
@@ -78,7 +85,7 @@ fn una_rama_nueva_sin_tip_anterior_no_se_chequea() {
     let provider = FileProvider::new(repo.join("provider.json"));
 
     let all_zeros = "0".repeat(40);
-    let rejected = check_one(repo, &all_zeros, &all_zeros, "refs/heads/secure/sprint/11", &provider).unwrap();
+    let rejected = check_one(repo, &all_zeros, &all_zeros, "refs/heads/secure/sprint/11", &provider, &estados()).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -102,7 +109,7 @@ fn una_insegura_no_se_verifica_aunque_el_proveedor_se_haya_movido() {
     let provider = FileProvider::new(repo.join("provider.json"));
     provider.set_status("ACC-101", "done").unwrap();
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/insecure/all", &provider).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/insecure/all", &provider, &estados()).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -167,7 +174,7 @@ fn un_cuerpo_editado_en_el_proveedor_rechaza_el_push() {
             ..Default::default()
         },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
     assert_eq!(r.len(), 1, "tiene que rechazar");
     assert_eq!(r[0].field, "cuerpo");
     assert_eq!(r[0].key, "ACC-101");
@@ -185,7 +192,7 @@ fn un_cuerpo_que_coincide_no_rechaza() {
             ..Default::default()
         },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
     assert!(r.is_empty(), "coincide, no hay nada que rechazar: {:?}", r[0].key);
 }
 
@@ -201,7 +208,7 @@ fn un_titulo_editado_en_el_proveedor_rechaza_el_push() {
             ..Default::default()
         },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].field, "titulo");
 }
@@ -242,7 +249,7 @@ fn un_item_que_el_push_no_toca_no_se_compara_por_cuerpo() {
             Snapshot { status: Some("open".into()), ..Default::default() },
         ),
     ]));
-    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
+    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
     assert!(r.is_empty(), "no se escribe ACC-101, no hay nada que probar: {:?}", r.first().map(|x| &x.key));
 }
 
@@ -269,7 +276,7 @@ fn el_status_se_compara_aunque_el_push_no_toque_el_item() {
         "ACC-101".to_string(),
         Snapshot { status: Some("in-progress".into()), ..Default::default() },
     )]));
-    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
+    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].field, "status");
 }
@@ -283,7 +290,7 @@ fn un_proveedor_que_no_informa_el_cuerpo_no_rechaza() {
         "ACC-101".to_string(),
         Snapshot { status: Some("open".into()), ..Default::default() },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
     assert!(r.is_empty(), "sin dato no hay divergencia que afirmar");
 }
 
@@ -296,6 +303,177 @@ fn borrar_una_rama_no_se_verifica() {
     let ceros = "0".repeat(40);
     let provider = FileProvider::new(dir.path().join("provider.json"));
     provider.set_status("ACC-101", "in-progress").unwrap();  // divergiria, si se mirara
-    let r = check_one(dir.path(), &tip, &ceros, "refs/heads/secure/sprint/10", &provider).unwrap();
+    let r = check_one(dir.path(), &tip, &ceros, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
     assert!(r.is_empty(), "un borrado no verifica nada");
+}
+
+// ─── los estados: traducidos, y la transicion propuesta ────────────────────
+//
+// `ACC-276`. El `status` del worklist y el del proveedor no son el mismo campo:
+// compararlos crudos rechazaba TODAS las ventanas, que es lo que tenia a la
+// instalacion apuntando al proveedor de prueba.
+
+use std::collections::BTreeMap;
+use worklist_provider::states::Destino;
+
+/// El mapeo real de una instalacion con Jira.
+fn con_jira() -> Estados {
+    let mapeo = BTreeMap::from([
+        ("open".to_string(), Destino::Status("To Do".into())),
+        ("in-progress".to_string(), Destino::Status("In Progress".into())),
+        ("done".to_string(), Destino::Status("Done".into())),
+        (
+            "dropped".to_string(),
+            Destino::Completo { status: "Done".into(), resolution: Some("Won't Do".into()) },
+        ),
+    ]);
+    Estados::new(&worklist_provider::states::vocabulario(None), mapeo).unwrap()
+}
+
+/// Un proveedor que informa status y las transiciones que su workflow admite.
+struct ConWorkflow {
+    status: String,
+    disponibles: Option<Vec<String>>,
+}
+
+impl Provider for ConWorkflow {
+    fn snapshot(&self, keys: &[String]) -> anyhow::Result<HashMap<String, Snapshot>> {
+        Ok(keys
+            .iter()
+            .map(|k| {
+                (k.clone(), Snapshot { status: Some(self.status.clone()), ..Default::default() })
+            })
+            .collect())
+    }
+    fn available_transitions(&self, _key: &str) -> anyhow::Result<Option<Vec<String>>> {
+        Ok(self.disponibles.clone())
+    }
+}
+
+/// Un repo con un item en `open`, y un push que lo mueve a `estado`.
+fn repo_que_mueve(estado: &str) -> (tempfile::TempDir, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run(repo, &["init", "-q"]);
+    run(repo, &["config", "user.email", "test@test"]);
+    run(repo, &["config", "user.name", "test"]);
+    let escribir = |st: &str| {
+        std::fs::write(
+            repo.join("ACC-101.task.md"),
+            format!("---\ntitle: X\nstatus: {st}\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\ncuerpo\n"),
+        )
+        .unwrap()
+    };
+    escribir("open");
+    run(repo, &["add", "-A"]);
+    run(repo, &["commit", "-q", "-m", "seed"]);
+    let old = rev_parse(repo, "HEAD");
+    escribir(estado);
+    run(repo, &["add", "-A"]);
+    // `--allow-empty`: mover a un estado que ya estaba es un push que no
+    // cambia el archivo, y es justo el caso que prueba la traduccion.
+    run(repo, &["commit", "-q", "--allow-empty", "-m", "state change"]);
+    let new = rev_parse(repo, "HEAD");
+    (dir, old, new)
+}
+
+/// Lo que el mapeo arregla: el tip dice `open`, Jira dice `"To Do"`, y son lo
+/// mismo. Sin traducir, esto rechazaba.
+#[test]
+fn el_status_se_compara_traducido_y_no_crudo() {
+    let (dir, old, _) = repo_que_mueve("open");
+    let p = ConWorkflow { status: "To Do".into(), disponibles: None };
+    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    assert!(r.is_empty(), "traducido coincide: {:?}", r.iter().map(|x| x.field).collect::<Vec<_>>());
+
+    // Y con el mapeo identidad —el del proveedor de prueba— el mismo estado
+    // rechaza, que es exactamente el defecto que este item cierra.
+    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].field, "status");
+}
+
+/// Un rechazo **por regla**: no es que el proveedor se movio, es que lo que se
+/// pide no es una transicion legal. Y dice cuales si.
+#[test]
+fn una_transicion_ilegal_rechaza_el_push_y_dice_cuales_si() {
+    let (dir, old, new) = repo_que_mueve("done");
+    let p = ConWorkflow {
+        status: "To Do".into(),
+        disponibles: Some(vec!["Ready for Review".into()]),
+    };
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    assert_eq!(r.len(), 1, "{r:?}", r = r.iter().map(|x| x.field).collect::<Vec<_>>());
+    assert_eq!(r[0].field, "transicion", "no es una deriva: es una regla");
+    assert_eq!(r[0].tip_status, "Done", "el destino traducido");
+    assert_eq!(r[0].disponibles.as_deref(), Some(&["Ready for Review".to_string()][..]));
+}
+
+/// Y si el workflow la admite, el push entra.
+#[test]
+fn una_transicion_legal_no_rechaza() {
+    let (dir, old, new) = repo_que_mueve("done");
+    let p = ConWorkflow { status: "To Do".into(), disponibles: Some(vec!["Done".into()]) };
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    assert!(r.is_empty(), "{:?}", r.iter().map(|x| x.field).collect::<Vec<_>>());
+}
+
+/// **No poder listar no es que no haya ninguna.** Un proveedor que no informa
+/// transiciones no puede rechazar por regla: no hay nada que verificar.
+#[test]
+fn un_proveedor_sin_workflow_no_rechaza_por_regla() {
+    let (dir, old, new) = repo_que_mueve("done");
+    let p = ConWorkflow { status: "To Do".into(), disponibles: None };
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    assert!(r.is_empty(), "{:?}", r.iter().map(|x| x.field).collect::<Vec<_>>());
+}
+
+/// Sacar un item del arbol **es** proponer su transicion a `dropped`, y se lee
+/// del diff: ni campo, ni lapida, ni commit especial.
+#[test]
+fn un_borrado_propone_dropped_con_su_resolucion() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run(repo, &["init", "-q"]);
+    run(repo, &["config", "user.email", "test@test"]);
+    run(repo, &["config", "user.name", "test"]);
+    std::fs::write(
+        repo.join("ACC-101.task.md"),
+        "---\ntitle: X\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n",
+    )
+    .unwrap();
+    run(repo, &["add", "-A"]);
+    run(repo, &["commit", "-q", "-m", "seed"]);
+    let old = rev_parse(repo, "HEAD");
+    std::fs::remove_file(repo.join("ACC-101.task.md")).unwrap();
+    run(repo, &["add", "-A"]);
+    run(repo, &["commit", "-q", "-m", "remove"]);
+    let new = rev_parse(repo, "HEAD");
+
+    let propuestas =
+        worklist_provider::check_push::transiciones_propuestas(repo, &old, &new, &con_jira())
+            .unwrap();
+    assert_eq!(propuestas, vec![("ACC-101".to_string(), "Done".to_string())]);
+
+    // Y el destino lleva la resolucion, que es lo unico que lo distingue de
+    // `done` en el board.
+    assert_eq!(con_jira().destino("dropped").unwrap().resolution(), Some("Won't Do"));
+}
+
+/// Un status que el vocabulario no declara se **rechaza**, no se saltea: no
+/// poder traducirlo es no poder decir nada, y callar seria confundirlo con
+/// "esta bien".
+#[test]
+fn un_status_fuera_del_vocabulario_se_rechaza() {
+    let (dir, old, _) = repo_que_mueve("inventado");
+    let p = ConWorkflow { status: "To Do".into(), disponibles: None };
+    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    // El tip de `old` dice `open`; el que quedo fuera del vocabulario es el de
+    // `new`, asi que este caso se arma al reves: el tip **es** el inventado.
+    let (dir2, _, new2) = repo_que_mueve("inventado");
+    let r2 = check_one(dir2.path(), &new2, &new2, "refs/heads/secure/sprint/1", &p, &con_jira())
+        .unwrap();
+    assert!(r.is_empty(), "el tip de old estaba bien");
+    assert_eq!(r2.len(), 1);
+    assert!(r2[0].tip_status.contains("no esta en el vocabulario"), "{}", r2[0].tip_status);
 }

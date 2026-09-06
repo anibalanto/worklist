@@ -14,6 +14,20 @@ pub trait Provider {
     /// el cuerpo, solo sobre lo que un push escribe. Ver `concepts/sync.md`
     /// seccion "Dos alcances, porque son dos promesas".
     fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>>;
+
+    /// Los estados a los que el workflow deja mover este issue **hoy**.
+    ///
+    /// Es una **lectura**, y por eso vive en este puerto y no en `Board`:
+    /// `Board` escribe. Con esto el `pre-receive` puede rechazar una transicion
+    /// ilegal **antes** de aceptar el push, que es lo unico que hace que un
+    /// rechazo por regla se pueda distinguir de uno por deriva sin haber
+    /// escrito nada de por medio.
+    ///
+    /// `None` es *"este proveedor no lo informa"* —el de prueba no tiene
+    /// workflow— y ahi no hay nada que verificar. No es "ninguna disponible".
+    fn available_transitions(&self, _key: &str) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
 }
 
 /// Lo que el proveedor sabe de un item. `None` en un campo es "este proveedor
@@ -112,6 +126,22 @@ impl JiraProvider {
 }
 
 impl Provider for JiraProvider {
+    /// **La forma exacta de esta llamada no esta medida contra el board real**,
+    /// como pasa con `Op::TransitionsOf` en `board.rs`. Su fracaso no se traga:
+    /// se propaga, y quien llama decide — no poder listar no es "no hay
+    /// ninguna".
+    fn available_transitions(&self, key: &str) -> Result<Option<Vec<String>>> {
+        let v = crate::board::acli_json(
+            crate::port::Op::TransitionsOf,
+            Some(key),
+            "workitem transitions",
+            &["jira", "workitem", "transitions", "--key", key, "--json"],
+        )?;
+        let mut out = Vec::new();
+        crate::board::nombres_en(&v, &mut out);
+        Ok(Some(out))
+    }
+
     fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>> {
         if keys.is_empty() {
             return Ok(HashMap::new());
