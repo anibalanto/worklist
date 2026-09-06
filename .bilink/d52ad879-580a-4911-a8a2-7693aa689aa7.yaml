@@ -11,12 +11,16 @@ endpoint:
     link: capture 81a6af6cab367ec8cf01a24cb2c47bf5
     n:
       1:
-        link: capture 1bc929a8cda68f403487acfb27e00a12 25aa3b7531815167cedcf9bb9b85a8fb
+        link: capture 68cfac2eeb09f9a61a02c43cbdebdc38 fc1d61388ac1406b543f41a061317714
     accepted:
     - agree:
       - test
-      link: capture 1062c615d2a26b415102ba0d4c16dd8d
-      hash: b862d9788d248ae4555e685670df2e51ab91522af89fc89cb32d39f03c2fce61
-      hash_ast: 2eb574b2e728009b8d02b307207a5f7cc2ff48de2c15ae3e6e589c4eabe31f3c
-      n: declined
+      link: capture 81a6af6cab367ec8cf01a24cb2c47bf5
+      hash: a9566d6f4366696d2531e8a56ef5a4e7842e471ee494a79125edb2100b7da84a
+      hash_ast: b2de4be621d857bb874ce1bf3d4f36fa221d74aab1e9fe3be15f93c0f3a27460
+      n:
+        1:
+          link: capture 68cfac2eeb09f9a61a02c43cbdebdc38 fc1d61388ac1406b543f41a061317714
+          hash: f9e51906cc7f7fc35bd1e788ea21a80c0a398c6ae0c5f94e0a525da429640a06
+          hash_ast: f60ffee35ef8fc6a2cd18291b05156d9298a451ac7cf977da1aba44206ab0444
     name: check_one

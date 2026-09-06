@@ -1,0 +1,4 @@
+file: crates/worklist-provider/src/provider.rs
+query: |-
+  (trait_item
+    name: (type_identifier) @n0 (#eq? @n0 "Provider")) @target
