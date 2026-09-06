@@ -8,7 +8,7 @@ endpoint:
       link: capture 85dfbb5a003a2fe0dff2675023ade514
       hash: 53b3ab6ce73676325ce298a36e3638197c5e70b3858f2e00523c7617a78a9247
   1:
-    link: capture c158b46478ab9efae0ef05c825e395c7
+    link: capture 13b12769a4a7ca7b96a5f8c5817b435b
     accepted:
     - agree:
       - test
