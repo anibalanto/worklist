@@ -650,6 +650,13 @@ fn cmd_check_push(
     let provider = provider.as_ref();
     let repo = std::env::current_dir()?;
 
+    // El unico momento en que el cliente y el servidor se hablan, asi que es el
+    // unico lugar donde una diferencia de version se puede notar sin ir a
+    // mirar. Dos binarios son dos formas de quedar viejo. Ver
+    // `concepts/distribution.md` § "Dos binarios son dos formas de quedar
+    // viejo".
+    println!("worklist-server {}", env!("CARGO_PKG_VERSION"));
+
     let lines: Vec<(String, String, String)> = if stdin {
         let mut out = Vec::new();
         for line in std::io::stdin().lock().lines() {
