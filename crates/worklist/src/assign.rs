@@ -204,7 +204,12 @@ pub fn assign_window(
         // ── Pasada 1: claves y renombres. Nada viaja al proveedor todavia:
         // un cuerpo enviado aca llevaria los nombres previos al renombre de
         // los demas del lote, y quedaria congelado asi.
-        let assigned = assign_and_rename(&tmp, &order, &types, &parents, board, dry_run)?;
+        // Sin ancla: la ref de una ventana la mueve el hook al final, y ese
+        // orden es su contrato con el `pre-receive`. Lo de `7k` es del
+        // panorama, donde no hay nadie esperando la respuesta.
+        let mut sin_ancla = Ancla::new(&tmp, refname, "", false);
+        let assigned =
+            assign_and_rename(&tmp, &order, &types, &parents, board, dry_run, &mut sin_ancla)?;
         let mut assigned = assigned;
 
         // ── Pasada 2: los cuerpos, ya con todos los nombres finales puestos.
@@ -548,6 +553,7 @@ fn assign_and_rename(
     parents: &HashMap<String, String>,
     board: &dyn Board,
     dry_run: bool,
+    ancla: &mut Ancla,
 ) -> Result<Vec<Assigned>> {
     let mut assigned: Vec<Assigned> = Vec::new();
     for slug in order {
@@ -589,6 +595,9 @@ fn assign_and_rename(
         };
 
         let touched = crate::rename_one(tmp, slug, &key)?;
+        // La clave ya existe del otro lado: que el panorama lo sepa ahora, y
+        // no dentro de ochenta items. Ver la task `7k`.
+        ancla.avanzar(tmp);
         assigned.push(Assigned {
             slug: slug.clone(),
             key,
@@ -653,37 +662,8 @@ pub fn bootstrap(
         return Ok(None);
     }
 
-    // Donde esta parado quien lo corre decide como se escribe.
-    let aca = git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-        == refname;
-    if !aca {
-        if let Some(wt) = crate::checked_out_at(repo, refname) {
-            bail!(
-                "{refname} esta checkouteada en otro worktree y no se puede mover:\n\
-                 \x20 {wt}\n\
-                 \n\
-                 moverla dejaria ese worktree con el indice del arbol anterior, y aca son\n\
-                 {n} renombres. Corre esto parado ahi, o saca el worktree primero.",
-                n = raw.len()
-            );
-        }
-    }
-    // Trabajar en el arbol de uno exige que este limpio: `rename_one` commitea
-    // con `add -A`, asi que lo que hubiera sin commitear se colaria adentro.
-    if aca && !dry_run {
-        let sucio = git_output(repo, &["status", "--porcelain"])?;
-        if !sucio.trim().is_empty() {
-            bail!(
-                "el arbol tiene cambios sin commitear, y el renombre commitea con `add -A`:\n\
-                 \x20 {}\n\
-                 \n\
-                 comitealos o descartalos antes.",
-                sucio.lines().take(3).collect::<Vec<_>>().join("\n  ")
-            );
-        }
-    }
+    let (aca, tmp) = worktree_para(repo, refname, &head, raw.len(), dry_run, "bootstrap")?;
+
     let slugs: Vec<String> =
         raw.iter().map(|s| s.split('\t').next().unwrap().to_string()).collect();
     let types: HashMap<String, String> = raw
@@ -694,14 +674,9 @@ pub fn bootstrap(
         })
         .collect();
 
-    let tmp = if aca {
-        repo.to_path_buf()
-    } else {
-        let tmp = tempdir_path(repo, &format!("bootstrap-{refname}"));
-        let _ = std::fs::remove_dir_all(&tmp);
-        git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), &head])?;
-        tmp
-    };
+    // La ref se mueve a medida: cada clave conseguida es un hecho consumado
+    // del otro lado, y descartarla al caer solo borra la mitad local. Ver `7k`.
+    let mut ancla = Ancla::new(repo, refname, &head, !aca);
 
     let result = (|| -> Result<(Vec<String>, Vec<Assigned>, String)> {
         let order = crate::topo_order(&tmp, &slugs)?;
@@ -712,7 +687,8 @@ pub fn bootstrap(
                 parents.insert(slug.clone(), p);
             }
         }
-        let mut assigned = assign_and_rename(&tmp, &order, &types, &parents, board, dry_run)?;
+        let mut assigned =
+            assign_and_rename(&tmp, &order, &types, &parents, board, dry_run, &mut ancla)?;
         if !dry_run {
             for a in assigned.iter_mut().filter(|a| a.created) {
                 let (path, _) = crate::find_file(&tmp, &a.key)?;
@@ -722,6 +698,7 @@ pub fn bootstrap(
                     std::fs::write(&path, &canonical)?;
                     crate::commit_all(&tmp, &format!("normalize: {}", a.key))?;
                     a.normalized = true;
+                    ancla.avanzar(&tmp);
                 }
                 board.set_description(&a.key, &adf)?;
             }
@@ -736,9 +713,10 @@ pub fn bootstrap(
     let (order, assigned, new_head) = result?;
 
     // Parado en la rama, los commits ya la movieron: `update-ref` seria mover
-    // dos veces la misma cosa.
-    if !aca && !dry_run && new_head != head {
-        git_output(repo, &["update-ref", refname, &new_head, &head])?;
+    // dos veces la misma cosa. Y el compare-and-swap parte de donde el ancla
+    // la dejo, que en una corrida entera es ya el ultimo item.
+    if !aca && !dry_run {
+        ancla.fijar(&new_head);
     }
     Ok(Some(BootstrapResult {
         refname: refname.to_string(),
@@ -798,7 +776,7 @@ pub fn reconcile(
     if raw.is_empty() {
         return Ok(None);
     }
-    let (aca, tmp) = worktree_para(repo, refname, &head, raw.len(), dry_run)?;
+    let (aca, tmp) = worktree_para(repo, refname, &head, raw.len(), dry_run, "reconcile")?;
 
     let slugs: Vec<String> =
         raw.iter().map(|s| s.split('\t').next().unwrap().to_string()).collect();
@@ -846,6 +824,58 @@ pub fn reconcile(
     }))
 }
 
+/// La ref del panorama, movida **a medida** y no al final.
+///
+/// Parado en la rama no hace falta: cada commit ya la mueve. En un worktree
+/// temporal la ref no se entera hasta el `update-ref`, y ahi esta el defecto
+/// que la task `7k` diagnostica: una corrida que crea issues y se cae descarta
+/// el arbol entero, y las claves que ya consiguio quedan **solo del otro
+/// lado**.
+///
+/// Descartar en bloque es correcto cuando lo descartado no salio del repo —es
+/// lo que hace la propagacion, y ahi esta bien—. Crear un issue es un efecto
+/// afuera, irreversible y pago: la unidad de atomicidad no es la corrida, es
+/// el item.
+pub(crate) struct Ancla<'a> {
+    repo: &'a Path,
+    refname: &'a str,
+    /// Donde quedo la ref la ultima vez que se movio, para el compare-and-swap
+    /// del `update-ref`.
+    ultimo: String,
+    /// Parado en la rama los commits ya la mueven: no hay nada que anclar.
+    activo: bool,
+}
+
+impl<'a> Ancla<'a> {
+    pub(crate) fn new(repo: &'a Path, refname: &'a str, head: &str, activo: bool) -> Self {
+        Ancla { repo, refname, ultimo: head.to_string(), activo }
+    }
+
+    /// Deja en la ref lo que el arbol temporal tiene ahora.
+    ///
+    /// **Que esto falle no puede tirar abajo lo que ya se hizo**, asi que no
+    /// propaga: la corrida sigue y el `update-ref` final lo reintenta. Un
+    /// ancla que se pierde deja el estado de antes, que es lo que habia sin
+    /// ella.
+    pub(crate) fn avanzar(&mut self, tmp: &Path) {
+        let Ok(ahora) = git_output(tmp, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()) else {
+            return;
+        };
+        self.fijar(&ahora);
+    }
+
+    /// Lo mismo, con el sha ya leido — el cierre, cuando el worktree temporal
+    /// ya no esta.
+    pub(crate) fn fijar(&mut self, sha: &str) {
+        if !self.activo || sha == self.ultimo {
+            return;
+        }
+        if git_output(self.repo, &["update-ref", self.refname, sha, &self.ultimo]).is_ok() {
+            self.ultimo = sha.to_string();
+        }
+    }
+}
+
 /// Donde se escribe: el arbol de uno si la rama esta checkouteada aca, y un
 /// worktree temporal si no.
 ///
@@ -858,11 +888,20 @@ fn worktree_para(
     head: &str,
     renombres: usize,
     dry_run: bool,
+    prefijo: &str,
 ) -> Result<(bool, std::path::PathBuf)> {
-    let aca = git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-        == refname;
+    // Un bare puede tener el `HEAD` apuntando a la rama y no tener donde
+    // escribir: sin arbol de trabajo, "aca" no existe y va el worktree
+    // temporal. Preguntarlo por el `HEAD` solo mandaba a `git status` a fallar
+    // con "esta operacion debe ser realizada en un arbol de trabajo".
+    let con_arbol = git_output(repo, &["rev-parse", "--is-bare-repository"])
+        .map(|s| s.trim() != "true")
+        .unwrap_or(true);
+    let aca = con_arbol
+        && git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+            == refname;
     if !aca {
         if let Some(wt) = crate::checked_out_at(repo, refname) {
             bail!(
@@ -891,7 +930,7 @@ fn worktree_para(
     if aca {
         return Ok((true, repo.to_path_buf()));
     }
-    let tmp = tempdir_path(repo, &format!("reconcile-{refname}"));
+    let tmp = tempdir_path(repo, &format!("{prefijo}-{refname}"));
     let _ = std::fs::remove_dir_all(&tmp);
     git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), head])?;
     Ok((false, tmp))

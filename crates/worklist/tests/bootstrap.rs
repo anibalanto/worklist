@@ -167,3 +167,80 @@ fn no_corre_sobre_un_arbol_sucio() {
     assert!(err.contains("sin commitear"), "{err}");
     assert!(spy.created.borrow().is_empty());
 }
+
+/// Un proveedor que crea bien las primeras `n` veces y despues falla, como se
+/// cayo la corrida real: 23 issues creados y el ítem 24 rompiendo la JQL.
+struct SeCaeEn {
+    n: std::cell::Cell<usize>,
+    hasta: usize,
+}
+
+impl worklist::board::Board for SeCaeEn {
+    fn create_or_find(
+        &self,
+        title: &str,
+        _t: &str,
+        _d: &str,
+        _p: Option<&str>,
+    ) -> anyhow::Result<worklist::board::Assignment> {
+        let i = self.n.get();
+        if i >= self.hasta {
+            anyhow::bail!("buscar por titulo fallo por acli: {title}");
+        }
+        self.n.set(i + 1);
+        Ok(worklist::board::Assignment::Created(format!("ACC-{}", 100 + i)))
+    }
+    fn find(&self, _t: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+    fn link_relates(&self, _a: &str, _b: &str) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+    fn link_blocks(&self, _a: &str, _b: &str) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+    fn set_summary(&self, _k: &str, _t: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn set_description(&self, _k: &str, _a: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn parent_of(&self, _k: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+    fn set_parent(&self, _k: &str, _e: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    fn create_or_find_sprint(&self, _b: &str, _n: &str) -> anyhow::Result<(String, bool)> {
+        Ok(("1".into(), false))
+    }
+    fn add_to_sprint(&self, _s: &str, _k: &[&str]) -> anyhow::Result<usize> {
+        Ok(0)
+    }
+    fn sprint_items(&self, _b: &str, _s: &str) -> anyhow::Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+/// La propiedad de `7k`: crear un issue es un efecto afuera, irreversible y
+/// pago. Una corrida que se cae no puede descartar las claves que ya consiguió
+/// — quedarían **sólo del otro lado**.
+#[test]
+fn una_corrida_que_se_cae_deja_en_el_panorama_lo_que_alcanzo_a_conseguir() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    // Corrido desde un repo donde la rama **no** está checkouteada, que es el
+    // caso del servidor y el único donde se perdía.
+    let bare = dir.path().join("bare.git");
+    common::run(&r, &["clone", "--bare", "-q", ".", bare.to_str().unwrap()]);
+    let antes = common::show_tree(&bare, REF);
+
+    let board = SeCaeEn { n: std::cell::Cell::new(0), hasta: 2 };
+    let e = bootstrap(&bare, REF, "https://x", &board, false).unwrap_err();
+
+    assert!(e.to_string().contains("fallo por acli"), "se cayó como se esperaba: {e}");
+    let despues = common::show_tree(&bare, REF);
+    assert_ne!(antes, despues, "**el panorama avanzó**: las dos claves conseguidas están");
+    assert!(despues.contains("ACC-100"), "la primera quedó: {despues}");
+    assert!(despues.contains("ACC-101"), "y la segunda: {despues}");
+}
