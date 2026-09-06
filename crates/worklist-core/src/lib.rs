@@ -31,14 +31,39 @@ pub fn find_file(repo: &Path, slug: &str) -> Result<(PathBuf, String)> {
     Err(anyhow!("no existe {slug}.<tipo>.md en {}", repo.display()))
 }
 
-/// Un id de proveedor lleva mayuscula y guion (ACC-101); un slug local no.
+/// Un id local lleva la marca `@` adelante; lo que no la lleva es del
+/// proveedor. La distincion se **declara**, no se infiere del formato de la
+/// clave: inferirla obligaba a conocer la forma de clave de cada proveedor, y
+/// con enteros pelados —GitHub, GitLab— no habia forma de acertar. Ver
+/// `concepts/item.md` § "La marca `@`".
 pub fn is_unassigned(slug: &str) -> bool {
-    let re = Regex::new(r"^[A-Z]+-\d+$").unwrap();
-    !re.is_match(slug)
+    slug.starts_with(MARCA)
 }
 
+/// La marca de lo que existe solo de este lado.
+pub const MARCA: char = '@';
+
+/// Un id valido: la marca opcional y despues `[A-Za-z0-9_-]+`. El `.` queda
+/// afuera porque es el separador de tipo, y el `/` porque los items viven en la
+/// raiz. Ver `concepts/item.md` § "El alfabeto de un id".
+pub fn is_valid_id(id: &str) -> bool {
+    let cuerpo = id.strip_prefix(MARCA).unwrap_or(id);
+    !cuerpo.is_empty() && cuerpo.chars().all(es_de_id)
+}
+
+/// Los caracteres que forman un id. La marca no esta: va adelante y una sola
+/// vez, asi que se trata aparte.
+fn es_de_id(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
+/// Lo que **no** es un caracter de id, escrito una sola vez: el alfabeto lo
+/// declara `concepts/item.md`, y la marca cuenta como parte del id para que
+/// `@a` no matchee adentro de `x@a`.
+const NO_ES_DE_ID: &str = "[^@A-Za-z0-9_-]";
+
 fn boundary(pattern: &str) -> Regex {
-    Regex::new(&format!("{pattern}(?:[^A-Za-z0-9_-]|$)")).unwrap()
+    Regex::new(&format!("{pattern}(?:{NO_ES_DE_ID}|$)")).unwrap()
 }
 
 /// Reescribe en `text` toda referencia delimitada a `old_slug` (link, backtick,
@@ -73,7 +98,7 @@ pub fn rewrite_references(text: &str, old_slug: &str, old_type: &str, new_id: &s
         // cierre queda pegado —`ACC-14---`— y el bloque deja de separarse.
         // Todo el archivo pasa a ser cuerpo. Ver la task `5i`.
         let parent_re = Regex::new(&format!(
-            r"parent:\s*{}([^A-Za-z0-9_-]|$)",
+            r"parent:\s*{}({NO_ES_DE_ID}|$)",
             regex::escape(old_slug)
         ))
         .unwrap();
@@ -160,14 +185,14 @@ fn replace_boundary_inner(
 fn left_is_boundary(text: &str, at: usize) -> bool {
     match text[..at].chars().next_back() {
         None => true,
-        Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '-',
+        Some(c) => !es_de_id(c) && c != MARCA,
     }
 }
 
 fn trailing_delim_len(matched: &str) -> usize {
-    // boundary() agrega (?:[^A-Za-z0-9_-]|$) al final: 0 o 1 byte ascii, o 0 si matcheo $.
+    // boundary() agrega (?:NO_ES_DE_ID|$) al final: 0 o 1 byte ascii, o 0 si matcheo $.
     match matched.chars().last() {
-        Some(c) if !c.is_ascii_alphanumeric() && c != '_' && c != '-' => c.len_utf8(),
+        Some(c) if !es_de_id(c) && c != MARCA => c.len_utf8(),
         _ => 0,
     }
 }
@@ -192,7 +217,7 @@ pub fn read_frontmatter_refs(text: &str) -> HashSet<String> {
         refs.insert(c[1].to_string());
     }
     let rel_re = Regex::new(r"relation\.[a-zA-Z_]+:\s*(\[[^\]]*\]|\S+)").unwrap();
-    let id_re = Regex::new(r"[A-Za-z0-9_-]+").unwrap();
+    let id_re = Regex::new(r"@?[A-Za-z0-9_-]+").unwrap();
     for c in rel_re.captures_iter(fm) {
         for id in id_re.find_iter(&c[1]) {
             refs.insert(id.as_str().to_string());

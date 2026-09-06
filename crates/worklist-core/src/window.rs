@@ -59,7 +59,7 @@ fn sprint_items(repo: &Path, rev: &str, sprint_file: &str) -> Result<Vec<String>
     let Some(c) = re.captures(&text) else {
         bail!("{sprint_file} no declara `items` en su frontmatter");
     };
-    Ok(regex::Regex::new(r"[A-Za-z0-9_-]+")
+    Ok(regex::Regex::new(r"@?[A-Za-z0-9_-]+")
         .unwrap()
         .find_iter(&c[1])
         .map(|m| m.as_str().to_string())

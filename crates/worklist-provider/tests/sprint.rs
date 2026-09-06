@@ -10,7 +10,7 @@ use common::{arbol, resolve, show, sprint, Spy};
 use std::cell::RefCell;
 
 /// Las claves que el sprint recibio, traducidas de vuelta a los slugs del
-/// worklist: las pruebas hablan de `n` y `o`, no de `ACC-3`.
+/// worklist: las pruebas hablan de `@n` y `@o`, no de `ACC-3`.
 fn slugs(res: &worklist_provider::assign::WindowResult, keys: &[String]) -> Vec<String> {
     let mut out: Vec<String> = keys
         .iter()
@@ -43,7 +43,7 @@ fn con_sprint(items: &[&str], key: Option<&str>) -> tempfile::TempDir {
 /// el subarbol de lo que `items` nombra.
 #[test]
 fn el_sprint_se_crea_y_lleva_su_subarbol() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let r = repo(&dir);
     let spy = Spy::default();
     let res = resolve(&r, &spy);
@@ -51,7 +51,7 @@ fn el_sprint_se_crea_y_lleva_su_subarbol() {
     let s = res.sprint.as_ref().expect("la ventana lleva un sprint");
     assert!(s.created, "no existia del otro lado");
     assert_eq!(s.id, "3");
-    assert_eq!(slugs(&res, &s.added), vec!["n", "o"], "la user story con su task");
+    assert_eq!(slugs(&res, &s.added), vec!["@n", "@o"], "la user story con su task");
     assert_eq!(s.already, Some(0));
 
     // El id del proveedor queda en git, que es lo que hace que la proxima
@@ -65,20 +65,20 @@ fn el_sprint_se_crea_y_lleva_su_subarbol() {
 /// que este en el arbol no la pone en la iteracion.
 #[test]
 fn lo_que_viaja_de_solo_lectura_no_es_miembro() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let spy = Spy::default();
     let res = resolve(&repo(&dir), &spy);
     let s = res.sprint.as_ref().unwrap();
     let dentro = slugs(&res, &s.added);
-    assert!(!dentro.contains(&"1".to_string()), "la epica ancestro no entra: {dentro:?}");
-    assert!(!dentro.contains(&"q".to_string()), "una task de otra rama tampoco: {dentro:?}");
+    assert!(!dentro.contains(&"@1".to_string()), "la epica ancestro no entra: {dentro:?}");
+    assert!(!dentro.contains(&"@q".to_string()), "una task de otra rama tampoco: {dentro:?}");
 }
 
 /// El nombre del otro lado lo escribe el worklist, con la regla de siempre:
 /// **nunca el id solo**, porque el que lee es el que menos contexto tiene.
 #[test]
 fn el_nombre_lleva_el_numero_y_el_titulo() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let spy = Spy::default();
     resolve(&repo(&dir), &spy);
     assert_eq!(spy.board.borrow()[0].0, "3 Los sprints en el board");
@@ -88,7 +88,7 @@ fn el_nombre_lleva_el_numero_y_el_titulo() {
 /// escribe nada: la lectura de antes deja el `sprint add` sin nada que mandar.
 #[test]
 fn volver_a_correrlo_no_duplica_ni_escribe() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let r = repo(&dir);
     let spy = Spy::default();
     let primera = resolve(&r, &spy);
@@ -109,7 +109,7 @@ fn volver_a_correrlo_no_duplica_ni_escribe() {
 /// ellas.
 #[test]
 fn una_ventana_sin_pedidos_igual_reconcilia_el_sprint() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let r = repo(&dir);
     let spy = Spy::default();
     let primera = resolve(&r, &spy);
@@ -124,7 +124,7 @@ fn una_ventana_sin_pedidos_igual_reconcilia_el_sprint() {
 /// de un item, que nadie vuelve a buscar por titulo.
 #[test]
 fn un_sprint_con_key_no_se_crea_ni_se_busca() {
-    let dir = con_sprint(&["n"], Some("4127"));
+    let dir = con_sprint(&["@n"], Some("4127"));
     let spy = Spy::default();
     let res = resolve(&repo(&dir), &spy);
     let s = res.sprint.as_ref().unwrap();
@@ -140,7 +140,7 @@ fn un_sprint_con_key_no_se_crea_ni_se_busca() {
 /// `create-or-find` tapa para un issue.
 #[test]
 fn una_corrida_caida_no_deja_el_sprint_duplicado() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let spy = Spy {
         // Lo que dejo la corrida anterior: el sprint creado, y el `key` que
         // nunca llego a git porque la ref no se movio.
@@ -171,7 +171,7 @@ fn una_rama_sin_sprint_no_inventa_uno() {
 /// Ver la task `5i`, que ya lo pago una vez con `parent`.
 #[test]
 fn anotar_el_key_no_rompe_el_frontmatter() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let r = repo(&dir);
     let spy = Spy::default();
     let res = resolve(&r, &spy);
@@ -188,7 +188,7 @@ fn anotar_el_key_no_rompe_el_frontmatter() {
 /// afirmar algo que no es cierto.
 #[test]
 fn el_id_del_board_llega_a_la_operacion() {
-    let dir = con_sprint(&["n"], None);
+    let dir = con_sprint(&["@n"], None);
     let spy = ConBoard::default();
     let rev = String::from_utf8(
         std::process::Command::new("git")
@@ -274,7 +274,7 @@ impl worklist_provider::board::Board for ConBoard {
 fn el_dry_run_no_afirma_cuantos_ya_estaban() {
     let dir = common::arbol();
     let r = dir.path().join("repo");
-    common::sprint(&r, "1", "El sprint", &["n"], None);
+    common::sprint(&r, "1", "El sprint", &["@n"], None);
     common::run(&r, &["add", "-A"]);
     common::run(&r, &["commit", "-qm", "sprint"]);
 

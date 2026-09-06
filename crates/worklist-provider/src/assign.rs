@@ -177,11 +177,16 @@ pub fn changed_keys(repo: &Path, old: &str, new_rev: &str) -> Result<Vec<String>
     Ok(out)
 }
 
+/// `<id>.<tipo>.md` -> `(id, tipo)`, y `None` si el nombre no es un item.
+///
+/// El id se valida contra el alfabeto, que es lo que deja afuera a
+/// `_sprints/20.sprint.md` —los items viven en la raiz, asi que el `/` no es de
+/// un id— y a cualquier nombre que el renombre despues no podria reescribir
+/// entero. Ver `concepts/item.md` § "El alfabeto de un id".
 fn split_item_name(name: &str) -> Option<(String, String)> {
     for t in worklist_core::TYPES {
         if let Some(stem) = name.strip_suffix(&format!(".{t}.md")) {
-            // sin directorios: los items viven en la raiz
-            if stem.contains('/') {
+            if !worklist_core::is_valid_id(stem) {
                 return None;
             }
             return Some((stem.to_string(), t.to_string()));
@@ -380,9 +385,9 @@ pub fn assign_window(
 /// El `.sprint.md` que el arbol de `rev` lleva, y el numero de sprint que lo
 /// nombra. Una ventana lleva exactamente uno.
 ///
-/// **No es un pedido y nunca lo fue**: `split_item_name` descarta cualquier
-/// stem con `/`, asi que `_sprints/17.sprint.md` no entra a la pasada 1. Un
-/// sprint del proveedor no es un issue. Ver `concepts/sync.md` seccion "El
+/// **No es un pedido y nunca lo fue**: el `/` no es un caracter de id, asi que
+/// `split_item_name` descarta `_sprints/17.sprint.md` y no entra a la pasada 1.
+/// Un sprint del proveedor no es un issue. Ver `concepts/sync.md` seccion "El
 /// sprint viaja como sprint, no como issue".
 /// La pasada 5 sobre **un** sprint: lo crea del otro lado si no esta, le anota
 /// su `key`, y le mete adentro los issues que le falten.
@@ -488,7 +493,7 @@ pub(crate) fn with_sprint_key(text: &str, key: &str) -> Result<String> {
 /// Los ids que el `items` del sprint declara.
 fn sprint_declared(text: &str) -> Vec<String> {
     let re = regex::Regex::new(r"(?m)^items:\s*\[([^\]]*)\]").unwrap();
-    let id = regex::Regex::new(r"[A-Za-z0-9_-]+").unwrap();
+    let id = regex::Regex::new(r"@?[A-Za-z0-9_-]+").unwrap();
     re.captures(text)
         .map(|c| id.find_iter(&c[1]).map(|m| m.as_str().to_string()).collect())
         .unwrap_or_default()
@@ -583,7 +588,7 @@ fn depends_of(text: &str) -> Vec<String> {
     let Some(end) = text.find("\n---\n") else { return Vec::new() };
     let fm = &text[..end];
     let re = regex::Regex::new(r"relation\.depends:\s*(\[[^\]]*\]|\S+)").unwrap();
-    let id = regex::Regex::new(r"[A-Za-z0-9_-]+").unwrap();
+    let id = regex::Regex::new(r"@?[A-Za-z0-9_-]+").unwrap();
     re.captures(fm)
         .map(|c| id.find_iter(&c[1]).map(|m| m.as_str().to_string()).collect())
         .unwrap_or_default()

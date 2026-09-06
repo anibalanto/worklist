@@ -40,9 +40,9 @@ fn la_epica_va_primero_y_los_hijos_le_cuelgan() {
 
     let res = correr(&r, &spy).unwrap();
 
-    assert_eq!(res.order[0], "1", "el orden topologico pone la epica adelante");
-    let epica = &res.assigned.iter().find(|a| a.slug == "1").unwrap().key;
-    for slug in ["n", "o", "q"] {
+    assert_eq!(res.order[0], "@1", "el orden topologico pone la epica adelante");
+    let epica = &res.assigned.iter().find(|a| a.slug == "@1").unwrap().key;
+    for slug in ["@n", "@o", "@q"] {
         let a = res.assigned.iter().find(|a| a.slug == slug).unwrap();
         assert_eq!(a.parent.as_deref(), Some(epica.as_str()), "{slug} cuelga de la epica");
     }
@@ -68,11 +68,11 @@ fn correrlo_de_nuevo_no_encuentra_nada_que_hacer() {
 fn el_cuerpo_viaja_solo_donde_el_issue_se_creo() {
     let dir = arbol();
     let r = dir.path().join("repo");
-    let spy = Spy { existing: vec![("o.task.md".into(), "ACC-99".into())], ..Spy::default() };
+    let spy = Spy { existing: vec![("@o.task.md".into(), "ACC-99".into())], ..Spy::default() };
 
     let res = correr(&r, &spy).unwrap();
 
-    let encontrado = res.assigned.iter().find(|a| a.slug == "o").unwrap();
+    let encontrado = res.assigned.iter().find(|a| a.slug == "@o").unwrap();
     assert_eq!(encontrado.key, "ACC-99");
     assert!(!encontrado.created, "lo encontro, no lo creo");
 
@@ -121,7 +121,7 @@ fn parado_en_el_panorama_escribe_en_el_arbol() {
     // El worktree quedo sano: los archivos renombrados en disco, y nada
     // "modificado" que nadie toco — que es el defecto de `5o`.
     assert!(r.join("ACC-1.epic.md").exists(), "el renombre esta en el arbol");
-    assert!(!r.join("1.epic.md").exists());
+    assert!(!r.join("@1.epic.md").exists());
     let status = String::from_utf8(
         std::process::Command::new("git")
             .arg("-C")
@@ -275,7 +275,7 @@ fn el_corte_respeta_el_orden_y_la_epica_va_en_el_primer_lote() {
 
     let uno = bootstrap(&r, REF, "https://x", &spy, "701", Some(1), false).unwrap().unwrap();
 
-    assert_eq!(uno.assigned[0].slug, "1", "la épica es la primera del orden");
+    assert_eq!(uno.assigned[0].slug, "@1", "la épica es la primera del orden");
     // Y la task que le cuelga, creada en el lote siguiente, la encuentra puesta.
     let dos = bootstrap(&r, REF, "https://x", &spy, "701", Some(1), false).unwrap().unwrap();
     assert!(dos.assigned[0].parent.is_some(), "el --parent sale de la épica ya creada");
@@ -318,9 +318,10 @@ fn una_epica_que_ya_tiene_clave_sigue_siendo_el_parent_de_sus_tasks() {
 fn los_sprints_sin_key_tambien_cruzan_y_van_al_final() {
     let dir = arbol();
     let r = dir.path().join("repo");
-    // El árbol trae `1.epic`, `n.user-story`, `o.task` y `q.task`; le pongo un
-    // sprint que nombra a la user story, que entra con su subárbol.
-    common::sprint(&r, "1", "el primero", &["n"], None);
+    // El árbol trae `@1.epic`, `@n.user-story`, `@o.task` y `@q.task`; le pongo
+    // un sprint que nombra a la user story, que entra con su subárbol. El
+    // sprint no lleva marca: su nombre no lo reemplaza el proveedor.
+    common::sprint(&r, "1", "el primero", &["@n"], None);
     common::run(&r, &["add", "-A"]);
     common::run(&r, &["commit", "-qm", "un sprint sin key"]);
     let spy = Spy::default();
@@ -355,7 +356,7 @@ fn los_sprints_sin_key_tambien_cruzan_y_van_al_final() {
 fn un_sprint_que_ya_cruzo_y_gana_un_item_lo_sube_igual() {
     let dir = arbol();
     let r = dir.path().join("repo");
-    common::sprint(&r, "1", "el primero", &["n"], None);
+    common::sprint(&r, "1", "el primero", &["@n"], None);
     common::run(&r, &["add", "-A"]);
     common::run(&r, &["commit", "-qm", "un sprint"]);
     let spy = Spy::default();
@@ -368,11 +369,11 @@ fn un_sprint_que_ya_cruzo_y_gana_un_item_lo_sube_igual() {
     // Y después gana un ítem, como pasó de verdad.
     let sp = r.join("_sprints/1.sprint.md");
     let texto = std::fs::read_to_string(&sp).unwrap();
-    // `q` es la única que el sprint no tenía: `n` entró con su subárbol.
+    // `@q` es la única que el sprint no tenía: `@n` entró con su subárbol.
     let q = uno
         .assigned
         .iter()
-        .find(|a| a.slug == "q")
+        .find(|a| a.slug == "@q")
         .map(|a| a.key.clone())
         .expect("q cruzó en la primera corrida");
     std::fs::write(&sp, texto.replace("items: [", &format!("items: [{q}, "))).unwrap();

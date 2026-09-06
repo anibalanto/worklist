@@ -302,3 +302,41 @@ fn renaming_reaches_files_in_subdirectories() {
     assert!(sprint.contains("[`ACC-94`"), "{sprint}");
     assert!(r.join("ACC-94.task.md").exists());
 }
+
+/// El renombre de un pedido de verdad: el nombre viejo lleva la marca, y el
+/// nuevo es la clave del proveedor. La marca no es un delimitador —es parte
+/// del id—, asi que `@a` no matchea adentro de `@a1` ni de `x@a`.
+#[test]
+fn renombrar_un_id_marcado_no_come_la_marca_ni_toca_a_sus_vecinos() {
+    let dir = git_repo();
+    let repo = dir.path();
+    write(
+        repo,
+        "@a.task.md",
+        "---\ntitle: A\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n# A\n",
+    );
+    write(
+        repo,
+        "@a1.task.md",
+        "---\ntitle: A1\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n# A1\n",
+    );
+    write(
+        repo,
+        "@b.task.md",
+        "---\ntitle: B\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: @a\nrelation.depends: [@a1]\n---\nSale de [`@a`](@a.task.md), y menciona @a1 al pasar.\n",
+    );
+    run(repo, &["add", "-A"]);
+    run(repo, &["commit", "-q", "-m", "seed"]);
+
+    let touched = worklist_core::rename_one(repo, "@a", "ACC-347").unwrap();
+    assert_eq!(touched, vec!["@b.task.md".to_string()]);
+    assert!(repo.join("ACC-347.task.md").exists());
+    assert!(!repo.join("@a.task.md").exists());
+
+    let b = std::fs::read_to_string(repo.join("@b.task.md")).unwrap();
+    assert!(b.contains("parent: ACC-347"), "{b}");
+    assert!(b.contains("[`ACC-347`](ACC-347.task.md)"), "{b}");
+    assert!(b.contains("relation.depends: [@a1]"), "el vecino mas largo no se toco: {b}");
+    assert!(b.contains("menciona @a1 al pasar"), "ni su mencion suelta: {b}");
+    assert!(repo.join("@a1.task.md").exists());
+}

@@ -24,7 +24,7 @@ fn the_parent_sent_is_the_epic_not_the_direct_one() {
     let epic_key = "ACC-1";
     for (title, _, parent) in created.iter() {
         match title.as_str() {
-            "1.epic.md" => assert_eq!(*parent, None, "la epica no cuelga de nada"),
+            "@1.epic.md" => assert_eq!(*parent, None, "la epica no cuelga de nada"),
             _ => assert_eq!(
                 parent.as_deref(),
                 Some(epic_key),
@@ -47,7 +47,7 @@ fn the_middle_step_travels_as_a_relates_link() {
     let rel = spy.relates.borrow();
     assert_eq!(
         *rel,
-        vec![(key_of("n"), key_of("o"))],
+        vec![(key_of("@n"), key_of("@o"))],
         "solo la task que cuelga de la user story"
     );
 }
@@ -59,11 +59,11 @@ fn the_middle_step_travels_as_a_relates_link() {
 fn a_found_item_gets_its_parent_in_a_second_step() {
     let dir = arbol();
     let spy = Spy {
-        existing: vec![("o.task.md".into(), "ACC-99".into())],
+        existing: vec![("@o.task.md".into(), "ACC-99".into())],
         ..Default::default()
     };
     let res = resolve(&dir.path().join("repo"), &spy);
-    let o = res.assigned.iter().find(|a| a.slug == "o").unwrap();
+    let o = res.assigned.iter().find(|a| a.slug == "@o").unwrap();
     assert_eq!(o.key, "ACC-99");
     let epica = o.parent.clone().expect("se le pidio un padre");
     assert!(o.parent_fixed, "y se corrigio en vez de avisar");
@@ -73,7 +73,7 @@ fn a_found_item_gets_its_parent_in_a_second_step() {
         "el proveedor tiene la epica puesta"
     );
 
-    let epic = res.assigned.iter().find(|a| a.slug == "1").unwrap();
+    let epic = res.assigned.iter().find(|a| a.slug == "@1").unwrap();
     assert!(!epic.parent_fixed, "la epica no pedia padre");
 }
 
@@ -83,12 +83,12 @@ fn a_found_item_gets_its_parent_in_a_second_step() {
 fn a_parent_already_right_is_not_touched_nor_reported() {
     let dir = arbol();
     let spy = Spy {
-        existing: vec![("o.task.md".into(), "ACC-99".into())],
+        existing: vec![("@o.task.md".into(), "ACC-99".into())],
         parents: RefCell::new(vec![("ACC-99".into(), "ACC-1".into())]),
         ..Default::default()
     };
     let res = resolve(&dir.path().join("repo"), &spy);
-    let o = res.assigned.iter().find(|a| a.slug == "o").unwrap();
+    let o = res.assigned.iter().find(|a| a.slug == "@o").unwrap();
     assert_eq!(o.parent.as_deref(), Some("ACC-1"), "la epica es la misma que ya tenia");
     assert!(!o.parent_fixed, "no habia nada que corregir");
 }
@@ -104,8 +104,8 @@ fn a_cycle_in_the_parents_is_reported_before_touching_the_provider() {
     run(r, &["init", "-q", "-b", "insecure/all"]);
     run(r, &["config", "user.email", "t@t"]);
     run(r, &["config", "user.name", "t"]);
-    item(r, "a.task.md", Some("b"));
-    item(r, "b.task.md", Some("a"));
+    item(r, "@a.task.md", Some("@b"));
+    item(r, "@b.task.md", Some("@a"));
     run(r, &["add", "-A"]);
     run(r, &["commit", "-qm", "ciclo"]);
     let spy = Spy::default();
@@ -147,14 +147,14 @@ fn a_dependency_outside_the_window_is_reported_and_does_not_abort() {
     run(r, &["init", "-q", "-b", "insecure/all"]);
     run(r, &["config", "user.email", "t@t"]);
     run(r, &["config", "user.name", "t"]);
-    item(r, "1.epic.md", None);
-    // `c` depende de `9`, que es de otra ventana, y de `d`, que esta en esta.
+    item(r, "@1.epic.md", None);
+    // `@c` depende de `@9`, que es de otra ventana, y de `@d`, que esta en esta.
     std::fs::write(
-        r.join("c.user-story.md"),
-        "---\ntitle: c\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: 1\nrelation.depends: [9, d]\n---\n\ncuerpo\n",
+        r.join("@c.user-story.md"),
+        "---\ntitle: c\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: @1\nrelation.depends: [@9, @d]\n---\n\ncuerpo\n",
     )
     .unwrap();
-    item(r, "d.task.md", Some("1"));
+    item(r, "@d.task.md", Some("@1"));
     run(r, &["add", "-A"]);
     run(r, &["commit", "-qm", "arbol"]);
 
@@ -166,12 +166,12 @@ fn a_dependency_outside_the_window_is_reported_and_does_not_abort() {
     };
     assert_eq!(
         res.untranslated,
-        vec![("9".to_string(), key_of("c"))],
+        vec![("@9".to_string(), key_of("@c"))],
         "la que apunta afuera se informa"
     );
     assert_eq!(
         *spy.blocks.borrow(),
-        vec![(key_of("d"), key_of("c"))],
+        vec![(key_of("@d"), key_of("@c"))],
         "y la de adentro se crea igual, ya traducida"
     );
     assert_eq!(res.assigned.len(), 3, "la ventana se resolvio entera");

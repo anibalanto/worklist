@@ -47,7 +47,7 @@ fn item_con(repo: &Path, name: &str, parent: Option<&str>, cuerpo: &str) {
     .unwrap();
 }
 
-/// `1.epic` con dos tasks: `o` entra al sprint 1, `q` se queda afuera y **lo
+/// `@1.epic` con dos tasks: `@o` entra al sprint 1, `@q` se queda afuera y **lo
 /// cita en la prosa**. Es el caso que separa copiar el renombre de rehacerlo.
 fn arbol_con_cita() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -56,10 +56,10 @@ fn arbol_con_cita() -> tempfile::TempDir {
     run(r, &["init", "-q", "-b", "insecure/all"]);
     run(r, &["config", "user.email", "t@t"]);
     run(r, &["config", "user.name", "t"]);
-    item(r, "1.epic.md", None);
-    item(r, "o.task.md", Some("1"));
-    item_con(r, "q.task.md", Some("1"), "sale de [`o`](o.task.md), que esta en el sprint 1");
-    sprint(r, "1", "el primero", &["o"], None);
+    item(r, "@1.epic.md", None);
+    item(r, "@o.task.md", Some("@1"));
+    item_con(r, "@q.task.md", Some("@1"), "sale de [`@o`](@o.task.md), que esta en el sprint 1");
+    sprint(r, "1", "el primero", &["@o"], None);
     run(r, &["add", "-A"]);
     run(r, &["commit", "-qm", "arbol"]);
     dir
@@ -74,7 +74,7 @@ fn el_trabajo_de_la_ventana_sube_y_el_panorama_no_pierde_lo_recortado() {
     // Alguien edita adentro de su ventana y empuja.
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "cuerpo editado en la ventana");
+    item_con(&wt, "@o.task.md", Some("@1"), "cuerpo editado en la ventana");
     run(&wt, &["commit", "-aqm", "edito o"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
@@ -82,9 +82,9 @@ fn el_trabajo_de_la_ventana_sube_y_el_panorama_no_pierde_lo_recortado() {
     let p = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
 
     assert_eq!(p.steps.len(), 1, "sube el commit de trabajo y no el corte");
-    assert!(show(r, "insecure/all", "o.task.md").contains("editado en la ventana"));
+    assert!(show(r, "insecure/all", "@o.task.md").contains("editado en la ventana"));
     // Y lo que la ventana no tiene sigue estando: propagar no recorta.
-    assert!(show(r, "insecure/all", "q.task.md").contains("sale de"));
+    assert!(show(r, "insecure/all", "@q.task.md").contains("sale de"));
     assert_eq!(rev(r, &propagated_ref("refs/heads/secure/sprint/1")), tip);
 }
 
@@ -133,12 +133,12 @@ fn el_renombre_se_rehace_y_corrige_las_referencias_de_afuera_del_recorte() {
         .map(|n| n.trim_end_matches(".task.md").to_string())
         .expect("el panorama tiene el archivo renombrado");
 
-    assert!(!listado.contains("\no.task.md"), "el slug ya no esta en el panorama");
+    assert!(!listado.contains("\n@o.task.md"), "el slug ya no esta en el panorama");
     // Lo que este caso existe para probar: la cita vive **afuera** del recorte,
     // asi que el commit de la ventana no la tocaba.
-    let q = show(r, "insecure/all", "q.task.md");
+    let q = show(r, "insecure/all", "@q.task.md");
     assert!(q.contains(&format!("{clave}.task.md")), "la cita de afuera quedo sin corregir: {q}");
-    assert!(!q.contains("(o.task.md)"), "quedo apuntando al slug viejo: {q}");
+    assert!(!q.contains("(@o.task.md)"), "quedo apuntando al slug viejo: {q}");
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn propagar_dos_veces_no_hace_nada_la_segunda() {
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "editado");
+    item_con(&wt, "@o.task.md", Some("@1"), "editado");
     run(&wt, &["commit", "-aqm", "edito o"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
@@ -170,12 +170,12 @@ fn un_choque_no_mueve_el_panorama_ni_la_marca() {
     // La ventana escribe una cosa…
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "lo que dice la ventana");
+    item_con(&wt, "@o.task.md", Some("@1"), "lo que dice la ventana");
     run(&wt, &["commit", "-aqm", "edito o en la ventana"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     // …y el panorama otra, sobre el mismo archivo.
-    item_con(r, "o.task.md", Some("1"), "lo que dice el panorama");
+    item_con(r, "@o.task.md", Some("@1"), "lo que dice el panorama");
     run(r, &["commit", "-aqm", "edito o en el panorama"]);
 
     let panorama = rev(r, "insecure/all");
@@ -183,7 +183,7 @@ fn un_choque_no_mueve_el_panorama_ni_la_marca() {
     let e = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap_err();
 
     let msg = format!("{e:#}");
-    assert!(msg.contains("o.task.md"), "el mensaje dice en que archivo choco: {msg}");
+    assert!(msg.contains("@o.task.md"), "el mensaje dice en que archivo choco: {msg}");
     assert_eq!(rev(r, "insecure/all"), panorama, "el panorama no avanza a medias");
     assert!(
         !existe(r, &propagated_ref("refs/heads/secure/sprint/1")),
@@ -200,7 +200,7 @@ fn sin_el_corte_no_se_propaga_nada() {
     run(r, &["branch", "secure/sprint/1", "insecure/all"]);
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "editado");
+    item_con(&wt, "@o.task.md", Some("@1"), "editado");
     run(&wt, &["commit", "-aqm", "edito o"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
@@ -220,11 +220,11 @@ fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "lo que dice la ventana");
+    item_con(&wt, "@o.task.md", Some("@1"), "lo que dice la ventana");
     run(&wt, &["commit", "-aqm", "edito o en la ventana"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
-    item_con(r, "o.task.md", Some("1"), "lo que dice el panorama");
+    item_con(r, "@o.task.md", Some("@1"), "lo que dice el panorama");
     run(r, &["commit", "-aqm", "edito o en el panorama"]);
 
     let panorama = rev(r, "insecure/all");
@@ -234,7 +234,7 @@ fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
     else {
         panic!("el prechequeo tiene que verlo")
     };
-    assert_eq!(files, vec!["o.task.md".to_string()]);
+    assert_eq!(files, vec!["@o.task.md".to_string()]);
     assert_eq!(rev(r, "insecure/all"), panorama, "probar no escribe");
 }
 
@@ -248,12 +248,12 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "lo que dice la ventana");
+    item_con(&wt, "@o.task.md", Some("@1"), "lo que dice la ventana");
     run(&wt, &["commit", "-aqm", "edito o"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     // El panorama avanza sobre otro archivo.
-    item_con(r, "q.task.md", Some("1"), "otra cosa, en otro archivo");
+    item_con(r, "@q.task.md", Some("@1"), "otra cosa, en otro archivo");
     run(r, &["commit", "-aqm", "edito q en el panorama"]);
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
@@ -263,8 +263,8 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
     ));
     // Y de hecho entra.
     propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
-    assert!(show(r, "insecure/all", "o.task.md").contains("lo que dice la ventana"));
-    assert!(show(r, "insecure/all", "q.task.md").contains("otra cosa"));
+    assert!(show(r, "insecure/all", "@o.task.md").contains("lo que dice la ventana"));
+    assert!(show(r, "insecure/all", "@q.task.md").contains("otra cosa"));
 }
 
 /// **No poder probar no es que entre.** El repo de la instalacion no tiene
@@ -297,7 +297,7 @@ fn desde_afuera_del_panorama_usa_un_worktree_temporal() {
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "editado en la ventana");
+    item_con(&wt, "@o.task.md", Some("@1"), "editado en la ventana");
     run(&wt, &["commit", "-aqm", "edito o"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
@@ -308,7 +308,7 @@ fn desde_afuera_del_panorama_usa_un_worktree_temporal() {
     let p = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
 
     assert_eq!(p.steps.len(), 1);
-    assert!(show(r, "insecure/all", "o.task.md").contains("editado en la ventana"));
+    assert!(show(r, "insecure/all", "@o.task.md").contains("editado en la ventana"));
     assert_eq!(rev(r, "insecure/all"), p.panorama_new, "la ref quedo movida");
 }
 
@@ -322,7 +322,7 @@ fn no_mueve_el_panorama_que_otro_worktree_tiene_abierto() {
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
-    item_con(&wt, "o.task.md", Some("1"), "editado");
+    item_con(&wt, "@o.task.md", Some("@1"), "editado");
     run(&wt, &["commit", "-aqm", "edito o"]);
     run(r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
@@ -350,14 +350,14 @@ fn arbol_con_dos_ventanas() -> tempfile::TempDir {
     run(r, &["config", "user.name", "t"]);
     item_con(
         r,
-        "1.epic.md",
+        "@1.epic.md",
         None,
-        "la epica nombra a [`o`](o.task.md) y a [`q`](q.task.md), y ninguna ventana ve las dos",
+        "la epica nombra a [`@o`](@o.task.md) y a [`@q`](@q.task.md), y ninguna ventana ve las dos",
     );
-    item(r, "o.task.md", Some("1"));
-    item(r, "q.task.md", Some("1"));
-    sprint(r, "1", "el primero", &["o"], None);
-    sprint(r, "2", "el segundo", &["q"], None);
+    item(r, "@o.task.md", Some("@1"));
+    item(r, "@q.task.md", Some("@1"));
+    sprint(r, "1", "el primero", &["@o"], None);
+    sprint(r, "2", "el segundo", &["@q"], None);
     run(r, &["add", "-A"]);
     run(r, &["commit", "-qm", "arbol"]);
     dir
@@ -408,8 +408,8 @@ fn el_normalize_de_dos_ventanas_sobre_el_mismo_ancestro_no_choca() {
         .expect("el panorama tiene la epica")
         .to_string();
     let epica = show(r, "insecure/all", &epica_file);
-    assert!(!epica.contains("(o.task.md)"), "la cita a `o` quedó sin renombrar:\n{epica}");
-    assert!(!epica.contains("(q.task.md)"), "la cita a `q` quedó sin renombrar:\n{epica}");
+    assert!(!epica.contains("(@o.task.md)"), "la cita a `@o` quedó sin renombrar:\n{epica}");
+    assert!(!epica.contains("(@q.task.md)"), "la cita a `@q` quedó sin renombrar:\n{epica}");
 }
 
 /// El otro que hizo caer `propagate --all-windows`: el `.sprint.md` del

@@ -76,13 +76,18 @@ impl Provider for FileProvider {
     }
 }
 
-/// Si `path` es un nombre de item real (`<CLAVE>.<tipo>.md`), su clave y status.
+/// Si `path` es un nombre de item real (`<CLAVE>.<tipo>.md`), su clave.
+///
+/// Dos condiciones y no una: el stem tiene que ser un id —lo que deja afuera a
+/// `_sprints/20.sprint.md`, porque el `/` no es de un id— y no llevar la marca
+/// `@`, que es lo que distingue un pedido de algo que el proveedor ya nombra.
 pub fn key_of_filename(name: &str) -> Option<String> {
     let stem = name.strip_suffix(".task.md")
         .or_else(|| name.strip_suffix(".user-story.md"))
         .or_else(|| name.strip_suffix(".epic.md"))
         .or_else(|| name.strip_suffix(".sprint.md"))?;
-    (!worklist_core::is_unassigned(stem)).then(|| stem.to_string())
+    (worklist_core::is_valid_id(stem) && !worklist_core::is_unassigned(stem))
+        .then(|| stem.to_string())
 }
 
 pub fn status_of(text: &str) -> Option<String> {

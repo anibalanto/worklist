@@ -145,7 +145,10 @@ impl Board for Spy {
     }
 }
 
-/// `1.epic` -> `n.user-story` -> `o.task`, y una task suelta bajo la epica.
+/// `@1.epic` -> `@n.user-story` -> `@o.task`, y una task suelta bajo la epica.
+///
+/// Los cuatro son **pedidos**, asi que llevan la marca: lo que no la lleva es
+/// del proveedor. Ver `concepts/item.md` seccion "La marca `@`".
 pub fn arbol() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let r = &dir.path().join("repo");
@@ -153,10 +156,10 @@ pub fn arbol() -> tempfile::TempDir {
     run(r, &["init", "-q", "-b", "insecure/all"]);
     run(r, &["config", "user.email", "t@t"]);
     run(r, &["config", "user.name", "t"]);
-    item(r, "1.epic.md", None);
-    item(r, "n.user-story.md", Some("1"));
-    item(r, "o.task.md", Some("n"));
-    item(r, "q.task.md", Some("1"));
+    item(r, "@1.epic.md", None);
+    item(r, "@n.user-story.md", Some("@1"));
+    item(r, "@o.task.md", Some("@n"));
+    item(r, "@q.task.md", Some("@1"));
     run(r, &["add", "-A"]);
     run(r, &["commit", "-qm", "arbol"]);
     dir

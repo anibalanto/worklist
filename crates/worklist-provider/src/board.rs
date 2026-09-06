@@ -646,6 +646,16 @@ const SPRINT_PAGE: &str = "100";
 /// habia ningun sprint con issues adentro contra el cual mirarla— y la forma
 /// de `search` no tiene por que ser la suya. Lo que si es seguro es que una
 /// clave se reconoce sola.
+///
+/// **Y la reconoce este archivo, no el core.** `PROJ-123` es la forma de clave
+/// de Jira, asi que la pregunta es del proveedor: el core sabe si un id lleva
+/// la marca `@`, y eso no alcanza para descartar un `"key": "customfield_1"`
+/// que venga en la misma respuesta. Ver `concepts/item.md` § "La marca `@`".
+fn es_clave_de_jira(s: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^[A-Z]+-\d+$").unwrap()).is_match(s)
+}
+
 fn keys_in(v: &serde_json::Value) -> Vec<String> {
     fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
         match v {
@@ -653,7 +663,7 @@ fn keys_in(v: &serde_json::Value) -> Vec<String> {
                 for (k, val) in m {
                     if k == "key" {
                         if let Some(s) = val.as_str() {
-                            if !worklist_core::is_unassigned(s) && !out.contains(&s.to_string()) {
+                            if es_clave_de_jira(s) && !out.contains(&s.to_string()) {
                                 out.push(s.to_string());
                             }
                         }
