@@ -53,6 +53,10 @@ pub enum Step {
     Normalized { key: String },
     /// La forma canonica del panorama ya coincidia: no quedo nada que escribir.
     AlreadyNormalized { key: String },
+    /// La clave del sprint, **reescrita** sobre el `.sprint.md` del panorama.
+    SprintKeyed { id: String, key: String },
+    /// El `.sprint.md` del panorama ya tenia su clave.
+    AlreadySprintKeyed { id: String, key: String },
 }
 
 /// Si lo que la ventana traeria entra al panorama.
@@ -135,6 +139,26 @@ fn normalize_subject(subject: &str) -> Option<String> {
         return None;
     }
     Some(key.to_string())
+}
+
+/// El id y la clave de un `sprint: <id> -> <clave>`, que tampoco se copia.
+///
+/// La pasada 5 escribe **un campo** —`key`— sobre el `.sprint.md` de la
+/// ventana. Copiarlo como parche arrastra las lineas de contexto, y el
+/// `.sprint.md` del panorama es el que se planifica: ahi se cierra el sprint y
+/// se mueven los items. Asi que el contexto difiere por trabajo legitimo, y el
+/// parche choca sobre algo que no estaba tratando de cambiar.
+///
+/// **Rehacerlo escribe `key` y nada mas**, que es lo unico que la ventana sabe
+/// y el panorama no. `status` e `items` no viajan hacia arriba: la
+/// planificacion se edita en el panorama. Ver `concepts/propagation.md`.
+fn sprint_subject(subject: &str) -> Option<(String, String)> {
+    let rest = subject.strip_prefix("sprint: ")?;
+    let (id, key) = rest.split_once(" -> ")?;
+    if id.is_empty() || key.is_empty() || id.contains(' ') || key.contains(' ') {
+        return None;
+    }
+    Some((id.to_string(), key.to_string()))
 }
 
 /// El commit del corte: el primero que la ventana tiene sobre el panorama.
@@ -228,7 +252,10 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
     let mut sobre = panorama;
     for (sha, subject) in &commits {
         // Los que se rehacen no se prueban: no hay parche que pueda no aplicar.
-        if rename_subject(subject).is_some() || normalize_subject(subject).is_some() {
+        if rename_subject(subject).is_some()
+            || normalize_subject(subject).is_some()
+            || sprint_subject(subject).is_some()
+        {
             continue;
         }
         let base = format!("{sha}^");
@@ -371,6 +398,21 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
                         }
                     }
                     Err(_) => steps.push(Step::AlreadyNormalized { key }),
+                }
+                continue;
+            }
+            // Y la clave del sprint: un campo, no un parche. El `.sprint.md`
+            // del panorama es el que se planifica, asi que su contexto difiere
+            // por trabajo legitimo y copiar el parche choca contra eso.
+            if let Some((id, key)) = sprint_subject(subject) {
+                let path = tmp.join("_sprints").join(format!("{id}.sprint.md"));
+                match std::fs::read_to_string(&path) {
+                    Ok(text) if crate::assign::sprint_key(&text).is_none() => {
+                        std::fs::write(&path, crate::assign::with_sprint_key(&text, &key)?)?;
+                        crate::commit_all(&tmp, &format!("sprint: {id} -> {key}"))?;
+                        steps.push(Step::SprintKeyed { id, key });
+                    }
+                    _ => steps.push(Step::AlreadySprintKeyed { id, key }),
                 }
                 continue;
             }

@@ -404,7 +404,7 @@ pub fn sprint_file(repo: &Path, rev: &str) -> Result<Option<(String, String)>> {
 /// El `key` del frontmatter del sprint: su id en el proveedor. **Su ausencia
 /// es que el sprint todavia no existe del otro lado**, igual que un archivo de
 /// item que todavia lleva slug.
-fn sprint_key(text: &str) -> Option<String> {
+pub(crate) fn sprint_key(text: &str) -> Option<String> {
     let end = text.find("\n---\n")?;
     let re = regex::Regex::new(r"(?m)^key:\s*(\S+)$").unwrap();
     re.captures(&text[..end]).map(|c| c[1].to_string())
@@ -412,7 +412,7 @@ fn sprint_key(text: &str) -> Option<String> {
 
 /// Anota el `key` en el frontmatter, despues de `items` si esta y al final si
 /// no. Es el unico campo del sprint que escribe el servidor.
-fn with_sprint_key(text: &str, key: &str) -> Result<String> {
+pub(crate) fn with_sprint_key(text: &str, key: &str) -> Result<String> {
     let Some(end) = text.find("\n---\n") else {
         bail!("el sprint no tiene frontmatter donde anotar su clave");
     };

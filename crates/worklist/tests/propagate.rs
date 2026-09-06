@@ -411,3 +411,54 @@ fn el_normalize_de_dos_ventanas_sobre_el_mismo_ancestro_no_choca() {
     assert!(!epica.contains("(o.task.md)"), "la cita a `o` quedó sin renombrar:\n{epica}");
     assert!(!epica.contains("(q.task.md)"), "la cita a `q` quedó sin renombrar:\n{epica}");
 }
+
+/// El otro que hizo caer `propagate --all-windows`: el `.sprint.md` del
+/// panorama se planifica —se cierra el sprint, se mueven ítems— así que su
+/// contexto difiere del de la ventana por trabajo legítimo, y el parche que
+/// sólo quería agregar `key:` chocaba contra eso.
+#[test]
+fn la_clave_del_sprint_se_reescribe_sobre_el_sprint_md_del_panorama() {
+    let dir = arbol_con_cita();
+    let r = &dir.path().join("repo");
+    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+    let spy = Spy::default();
+    worklist::assign::assign_window(
+        r,
+        "refs/heads/secure/sprint/1",
+        worklist::check_push::ALL_ZEROS,
+        &tip,
+        "https://x",
+        &spy,
+        "701",
+        false,
+    )
+    .unwrap()
+    .unwrap();
+
+    // Y mientras tanto el sprint se cierra en el panorama, que es donde se
+    // planifica: cambia `status`, y con él el contexto del parche.
+    let sp = r.join("_sprints/1.sprint.md");
+    let texto = std::fs::read_to_string(&sp).unwrap();
+    std::fs::write(&sp, texto.replace("status: in-progress", "status: done")).unwrap();
+    run(r, &["commit", "-aqm", "sprint 1 cerrado"]);
+
+    let tip = rev(r, "refs/heads/secure/sprint/1");
+    let p = propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
+
+    let clave = p
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::SprintKeyed { key, .. } => Some(key.clone()),
+            _ => None,
+        })
+        .expect("la clave del sprint se rehace, no se copia");
+
+    let sprint = show(r, "insecure/all", "_sprints/1.sprint.md");
+    assert!(sprint.contains(&format!("key: {clave}")), "falta la clave:\n{sprint}");
+    // Y lo que el panorama había planificado sigue ahí: sube la clave, no el
+    // `.sprint.md` de la ventana.
+    assert!(sprint.contains("status: done"), "el cierre se perdió:\n{sprint}");
+}

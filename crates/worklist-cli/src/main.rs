@@ -438,6 +438,12 @@ fn report_propagated(p: &worklist::propagate::Propagated, dry_run: bool) {
             Step::AlreadyNormalized { key } => {
                 println!("  normalize: {key}  (el panorama ya lo tenia)")
             }
+            // Y la clave del sprint es un campo, no un parche: el `.sprint.md`
+            // del panorama es el que se planifica.
+            Step::SprintKeyed { id, key } => println!("  sprint: {id} -> {key}  (rehecho)"),
+            Step::AlreadySprintKeyed { id, key } => {
+                println!("  sprint: {id} -> {key}  (el panorama ya lo tenia)")
+            }
         }
     }
     if !dry_run && p.panorama_new != p.panorama_old {
