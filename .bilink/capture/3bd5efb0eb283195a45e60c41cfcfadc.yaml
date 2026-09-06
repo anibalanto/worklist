@@ -1,0 +1,4 @@
+file: crates/worklist-core/src/window.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "work_above_cut")) @target
