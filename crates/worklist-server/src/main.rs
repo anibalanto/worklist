@@ -137,6 +137,13 @@ enum Cmd {
         /// configuracion es la peor forma de enterarse de que falta.
         #[arg(long = "board")]
         board_id: String,
+        /// El proveedor **de prueba** para el `pre-receive`. Sin el, el
+        /// compare-and-swap se instala contra el real — y contra el real
+        /// rechaza TODAS las ventanas, porque el `status` del worklist y el del
+        /// proveedor no son el mismo campo. Mientras ese mapeo no exista, esta
+        /// es la configuracion de la instalacion y no una opcion de desarrollo.
+        #[arg(long)]
+        provider_file: Option<PathBuf>,
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
         /// Sobrescribe un hook que ya existe.
@@ -197,8 +204,8 @@ fn main() -> Result<()> {
         Cmd::Propagate { stdin, window, all_windows, base, dry_run } => {
             cmd_propagate(stdin, &window, all_windows, &base, dry_run)
         }
-        Cmd::InstallHooks { repo, project, board_id, base, force, dry_run } => {
-            cmd_install_hooks(&repo, &project, &board_id, &base, force, dry_run)
+        Cmd::InstallHooks { repo, project, board_id, provider_file, base, force, dry_run } => {
+            cmd_install_hooks(&repo, &project, &board_id, provider_file.as_deref(), &base, force, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             cmd_create_or_find(project, r#type, source, titulo, dry_run)
@@ -791,6 +798,7 @@ fn cmd_install_hooks(
     repo: &std::path::Path,
     project: &str,
     board_id: &str,
+    provider_file: Option<&std::path::Path>,
     base: &str,
     force: bool,
     dry_run: bool,
@@ -805,20 +813,35 @@ fn cmd_install_hooks(
         anyhow::bail!("{} no tiene hooks/: no es un bare", repo.display());
     }
 
+    // Con el proveedor real el compare-and-swap rechaza todas las ventanas: el
+    // `status` del worklist y el del proveedor no son el mismo campo. Mientras
+    // ese mapeo no exista, la instalacion corre contra el de prueba. Ver
+    // `commands/install-hooks.md` § "Con que proveedor queda el pre-receive".
+    let contra = match provider_file {
+        Some(f) => format!("--provider-file {}", f.display()),
+        None => format!("--project {project}"),
+    };
+    let nota = match provider_file {
+        Some(_) => concat!(
+            "# Contra el proveedor de prueba: con el real, el status del worklist\n",
+            "# y el de Jira no son el mismo campo, y el compare-and-swap rechaza\n",
+            "# todas las ventanas de entrada.\n",
+        ),
+        None => "",
+    };
     let pre = format!(
         "#!/bin/sh\n\
          # generado por worklist-server install-hooks — no editar\n\
-         exec {exe} check-push --stdin --project {project}\n"
+         {nota}\
+         exec {exe} check-push --stdin {contra}\n"
     );
-    // Las dos pasadas en orden, y **para en la primera que falle**: propagar lo
-    // que `assign-keys` no llego a resolver subiria al panorama un estado a
-    // medias.
+    // **Sin `propagate`**: `assign-keys` ya propaga al final. Llamarlo aparte
+    // correria la propagacion dos veces.
     let post = format!(
         "#!/bin/sh\n\
          # generado por worklist-server install-hooks — no editar\n\
-         set -e\n\
-         {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}\n\
-         {exe} propagate --stdin --base {base}\n"
+         # La propagacion al panorama va adentro de assign-keys, al final.\n\
+         exec {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}\n"
     );
 
     for (name, body) in [("pre-receive", &pre), ("post-receive", &post)] {
