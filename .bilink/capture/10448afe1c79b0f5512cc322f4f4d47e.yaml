@@ -1,0 +1,4 @@
+file: crates/worklist-provider/src/propagate.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "would_conflict")) @target
