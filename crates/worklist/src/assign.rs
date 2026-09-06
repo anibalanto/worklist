@@ -103,6 +103,26 @@ pub fn pending_requests(repo: &Path, rev: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Todos los items del arbol, con su tipo — tengan clave o no.
+///
+/// Distinto de `pending_requests`, que lista **lo que hay que pedir**. Quien
+/// tiene clave decide que se pide, no que se puede **nombrar**: una epica ya
+/// resuelta sigue siendo la epica ancestro de sus tasks, y buscarla solo entre
+/// los pedidos la vuelve invisible en cuanto cruzo. Ver la task `7p`.
+pub fn all_items(repo: &Path, rev: &str) -> Result<Vec<(String, String)>> {
+    let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
+    let mut out = Vec::new();
+    for name in listing.lines() {
+        if !name.ends_with(".md") {
+            continue;
+        }
+        if let Some((id, item_type)) = split_item_name(name) {
+            out.push((id, item_type));
+        }
+    }
+    Ok(out)
+}
+
 /// Las claves de los items que **este push** toco y que ya estaban resueltos.
 ///
 /// Que cambio lo dice el push, no el proveedor: el diff entre el tip anterior y
@@ -564,9 +584,14 @@ fn assign_and_rename(
 
         // La epica ya tiene clave: el orden topologico la pone antes.
         let epic_slug = epic_ancestor(slug, parents, types);
-        let parent_key = epic_slug
-            .as_ref()
-            .and_then(|e| assigned.iter().find(|a: &&Assigned| &a.slug == e).map(|a| a.key.clone()));
+        let parent_key = epic_slug.as_ref().and_then(|e| {
+            // La epica ya cruzo: su nombre **es** la clave, y no hay nada que
+            // buscar en lo asignado de esta corrida. Ver `7p`.
+            if !crate::is_unassigned(e) {
+                return Some(e.clone());
+            }
+            assigned.iter().find(|a: &&Assigned| &a.slug == e).map(|a| a.key.clone())
+        });
 
         if dry_run {
             assigned.push(Assigned {
@@ -654,6 +679,7 @@ pub fn bootstrap(
     refname: &str,
     base: &str,
     board: &dyn Board,
+    limit: Option<usize>,
     dry_run: bool,
 ) -> Result<Option<BootstrapResult>> {
     let head = git_output(repo, &["rev-parse", refname])?.trim().to_string();
@@ -666,25 +692,29 @@ pub fn bootstrap(
 
     let slugs: Vec<String> =
         raw.iter().map(|s| s.split('\t').next().unwrap().to_string()).collect();
-    let types: HashMap<String, String> = raw
-        .iter()
-        .map(|s| {
-            let mut p = s.split('\t');
-            (p.next().unwrap().to_string(), p.next().unwrap().to_string())
-        })
-        .collect();
+    // El tipo se conoce de **todos**, no solo de los pedidos: la epica ancestro
+    // puede tener clave ya. Ver `7p`.
+    let types: HashMap<String, String> = all_items(repo, &head)?.into_iter().collect();
 
     // La ref se mueve a medida: cada clave conseguida es un hecho consumado
     // del otro lado, y descartarla al caer solo borra la mitad local. Ver `7k`.
     let mut ancla = Ancla::new(repo, refname, &head, !aca);
 
     let result = (|| -> Result<(Vec<String>, Vec<Assigned>, String)> {
-        let order = crate::topo_order(&tmp, &slugs)?;
+        let mut order = crate::topo_order(&tmp, &slugs)?;
+        // El corte va **despues** del orden topologico, no antes: un lote puede
+        // dejar una epica creada y sus tasks sin crear —estado valido, porque
+        // el `--parent` se pone al crear cada task y la epica ya tiene clave—
+        // y al reves no puede pasar. Ver `commands/bootstrap.md`.
+        if let Some(n) = limit {
+            order.truncate(n);
+        }
+        // La cadena de `parent` se arma sobre el arbol entero, por lo mismo.
         let mut parents: HashMap<String, String> = HashMap::new();
-        for slug in &slugs {
-            let (path, _) = crate::find_file(&tmp, slug)?;
+        for (id, _) in types.iter() {
+            let Ok((path, _)) = crate::find_file(&tmp, id) else { continue };
             if let Some(p) = parent_of(&std::fs::read_to_string(&path)?) {
-                parents.insert(slug.clone(), p);
+                parents.insert(id.clone(), p);
             }
         }
         let mut assigned =

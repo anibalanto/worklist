@@ -12,7 +12,7 @@ use worklist::assign::bootstrap;
 const REF: &str = "refs/heads/insecure/all";
 
 fn correr(dir: &std::path::Path, spy: &Spy) -> Option<worklist::assign::BootstrapResult> {
-    bootstrap(dir, REF, "https://x", spy, false).unwrap()
+    bootstrap(dir, REF, "https://x", spy, None, false).unwrap()
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn correrlo_de_nuevo_no_encuentra_nada_que_hacer() {
     correr(&r, &spy).unwrap();
     let creados = spy.created.borrow().len();
 
-    assert!(bootstrap(&r, REF, "https://x", &spy, false).unwrap().is_none());
+    assert!(bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().is_none());
     assert_eq!(spy.created.borrow().len(), creados, "no le pidio nada mas al proveedor");
 }
 
@@ -148,7 +148,7 @@ fn no_mueve_el_panorama_si_lo_tiene_otro_worktree() {
     common::run(&r, &["worktree", "add", "-q", otro.to_str().unwrap(), "insecure/all"]);
 
     let spy = Spy::default();
-    let err = bootstrap(&r, REF, "https://x", &spy, false).unwrap_err().to_string();
+    let err = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap_err().to_string();
     assert!(err.contains("otro worktree"), "tiene que nombrar el problema: {err}");
     assert!(err.contains("otro"), "y donde esta: {err}");
     assert!(spy.created.borrow().is_empty(), "y no le pidio nada al proveedor");
@@ -163,7 +163,7 @@ fn no_corre_sobre_un_arbol_sucio() {
     std::fs::write(r.join("sin-commitear.txt"), "algo").unwrap();
 
     let spy = Spy::default();
-    let err = bootstrap(&r, REF, "https://x", &spy, false).unwrap_err().to_string();
+    let err = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap_err().to_string();
     assert!(err.contains("sin commitear"), "{err}");
     assert!(spy.created.borrow().is_empty());
 }
@@ -236,11 +236,77 @@ fn una_corrida_que_se_cae_deja_en_el_panorama_lo_que_alcanzo_a_conseguir() {
     let antes = common::show_tree(&bare, REF);
 
     let board = SeCaeEn { n: std::cell::Cell::new(0), hasta: 2 };
-    let e = bootstrap(&bare, REF, "https://x", &board, false).unwrap_err();
+    let e = bootstrap(&bare, REF, "https://x", &board, None, false).unwrap_err();
 
     assert!(e.to_string().contains("fallo por acli"), "se cayó como se esperaba: {e}");
     let despues = common::show_tree(&bare, REF);
     assert_ne!(antes, despues, "**el panorama avanzó**: las dos claves conseguidas están");
     assert!(despues.contains("ACC-100"), "la primera quedó: {despues}");
     assert!(despues.contains("ACC-101"), "y la segunda: {despues}");
+}
+
+/// El corte es para mirar, no para poder deshacer: lo que queda sigue sin
+/// clave, así que la corrida siguiente lo toma sin contabilidad extra.
+#[test]
+fn limit_crea_los_primeros_y_para_y_la_siguiente_sigue() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    let spy = Spy::default();
+
+    let uno = bootstrap(&r, REF, "https://x", &spy, Some(2), false).unwrap().unwrap();
+    assert_eq!(uno.assigned.len(), 2, "dos y para, de los cuatro");
+    assert_eq!(spy.created.borrow().len(), 2, "y sólo dos issues creados");
+
+    // Sin marca de progreso: lo que falta es lo que no tiene clave.
+    let dos = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().unwrap();
+    assert_eq!(dos.assigned.len(), 2, "los dos que quedaban");
+    assert_eq!(spy.created.borrow().len(), 4, "cuatro en total, ninguno dos veces");
+
+    assert!(bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().is_none());
+}
+
+/// El corte va después del orden topológico: una épica creada con sus tasks
+/// sin crear es válido, y al revés el orden lo impide.
+#[test]
+fn el_corte_respeta_el_orden_y_la_epica_va_en_el_primer_lote() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    let spy = Spy::default();
+
+    let uno = bootstrap(&r, REF, "https://x", &spy, Some(1), false).unwrap().unwrap();
+
+    assert_eq!(uno.assigned[0].slug, "1", "la épica es la primera del orden");
+    // Y la task que le cuelga, creada en el lote siguiente, la encuentra puesta.
+    let dos = bootstrap(&r, REF, "https://x", &spy, Some(1), false).unwrap().unwrap();
+    assert!(dos.assigned[0].parent.is_some(), "el --parent sale de la épica ya creada");
+}
+
+/// El defecto de `7p`: la épica ya cruzó, así que no está entre los pedidos —
+/// y buscar el ancestro sólo ahí la volvía invisible. Once ítems del panorama
+/// real se habrían creado sueltos.
+#[test]
+fn una_epica_que_ya_tiene_clave_sigue_siendo_el_parent_de_sus_tasks() {
+    let dir = arbol();
+    let r = dir.path().join("repo");
+    let spy = Spy::default();
+
+    // Primer lote: sólo la épica. Queda con clave y fuera de los pedidos.
+    let uno = bootstrap(&r, REF, "https://x", &spy, Some(1), false).unwrap().unwrap();
+    let clave_epica = uno.assigned[0].key.clone();
+    assert!(common::show_tree(&r, REF).contains(&format!("{clave_epica}.epic.md")));
+
+    // Y lo que sigue la nombra igual.
+    let dos = bootstrap(&r, REF, "https://x", &spy, None, false).unwrap().unwrap();
+    for a in &dos.assigned {
+        assert_eq!(
+            a.parent.as_deref(),
+            Some(clave_epica.as_str()),
+            "{} se creó sin la épica que ya tenía clave",
+            a.slug
+        );
+    }
+    // Y le llegó al proveedor en la creación, que es el único momento en que viaja.
+    for (_, _, parent) in spy.created.borrow().iter().skip(1) {
+        assert_eq!(parent.as_deref(), Some(clave_epica.as_str()));
+    }
 }

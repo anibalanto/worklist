@@ -82,6 +82,11 @@ enum Cmd {
         /// Base del proveedor, para traducir los links a otros items.
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
+        /// Crea solo los primeros N y para. Un lote no necesita ser una
+        /// transaccion —de eso ya se ocupa el ancla— sino un corte: noventa y
+        /// un issues en un board real conviene verlos a la decima.
+        #[arg(long)]
+        limit: Option<usize>,
         #[arg(long)]
         dry_run: bool,
     },
@@ -189,8 +194,8 @@ fn main() -> Result<()> {
         Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
             cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
         }
-        Cmd::Bootstrap { project, refname, base, dry_run } => {
-            cmd_bootstrap(project, refname, base, dry_run)
+        Cmd::Bootstrap { project, refname, base, limit, dry_run } => {
+            cmd_bootstrap(project, refname, base, limit, dry_run)
         }
         Cmd::Reconcile { project, refname, dry_run } => {
             cmd_reconcile(project, refname, dry_run)
@@ -358,13 +363,19 @@ fn cmd_assign_keys(
 /// **No propaga ni verifica.** Escribe en el panorama porque el que escribe es
 /// el servidor, que es lo mismo que ya hace la propagacion — `insecure/**`
 /// rechaza al cliente, no al servidor.
-fn cmd_bootstrap(project: String, refname: String, base: String, dry_run: bool) -> Result<()> {
+fn cmd_bootstrap(
+    project: String,
+    refname: String,
+    base: String,
+    limit: Option<usize>,
+    dry_run: bool,
+) -> Result<()> {
     if !dry_run {
         worklist::port::preflight()?;
     }
     let repo = std::env::current_dir()?;
     let board = JiraBoard::new(project);
-    let Some(r) = worklist::assign::bootstrap(&repo, &refname, &base, &board, dry_run)? else {
+    let Some(r) = worklist::assign::bootstrap(&repo, &refname, &base, &board, limit, dry_run)? else {
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
     };
