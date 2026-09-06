@@ -16,7 +16,11 @@ endpoint:
     - agree:
       - test
       link: capture 9000a1d9e3832189096236e59829df1e
-      hash: e5f48b494d04c23dd9a86859fa56aafc0fed61683cb1395a23cf9daeb0b8b683
-      hash_ast: 6aebe6f4ffedb537610d297f6e1354ab0e577fd6516e8320f136d984450857be
-      n: declined
+      hash: 26004d628e07b7d50970578b95e96e4ba8b77c2aa9ebc71da0c72bb4d9948a6d
+      hash_ast: 96f816054a1a57eda45c70456699ab8b29a7f6e472b7dd08af22025489991a51
+      n:
+        1:
+          link: capture fe7d1174536caf8cc916c8f4bc1f43e7
+          hash: 1990cadcf56e891dc0ad465dcf8f946d76ad73fa70e1ba42d9d608fe05246722
+          hash_ast: 54b6b5f026bfe157ea6e35eb4aac688f0d8ea4d4a4a4f48e4f02d905d7606fe5
     name: el-reparto
