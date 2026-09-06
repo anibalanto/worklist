@@ -16,8 +16,8 @@ endpoint:
     - agree:
       - test
       link: capture c9163f3564b495701e2a9e874abe6cd4
-      hash: 1675be8c4bfd4b7cb1ae9bddb08b3b0bd9844abec886c62881d8c99ba5bcbd23
-      hash_ast: 075ee7e5800ee40f9798ac0aaabb83db0b9900b9d82fd054a061a0978e4e9913
+      hash: 5bf669b0d18254fed10805dca6432f666296b1be90777576f3e3b8bd9efac1a2
+      hash_ast: bf9b2773922b4dafe648ca8dd1236a1ba4c2da8727e7d08e4812bc65b7c96166
       n:
         1:
           link: capture 4dbfc0e9f639666520016dfc4f4ff1f1 86e17303b419a376487000cbf5f9da46
