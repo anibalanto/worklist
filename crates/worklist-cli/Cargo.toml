@@ -1,15 +1,18 @@
 [package]
 name = "worklist-cli"
-version = "0.1.0"
-edition = "2021"
-
+version.workspace = true
+edition.workspace = true
 license.workspace = true
 
+# El binario del cliente. **No depende de `worklist-provider`**, y eso es lo
+# unico que hay que verificar para que la invariante se sostenga: el codigo
+# que habla con el proveedor no esta en la maquina de quien trabaja.
+# Ver `concepts/distribution.md`.
 [[bin]]
 name = "worklist"
 path = "src/main.rs"
 
 [dependencies]
-worklist = { path = "../worklist" }
+worklist-core = { path = "../worklist-core" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"

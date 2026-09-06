@@ -12,11 +12,11 @@
 //! nombres. Copiados tal cual dejarian las referencias de afuera del recorte
 //! apuntando a un slug que ya no existe.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::path::Path;
-
-/// El panorama: la rama de la que se corta todo y a la que nadie empuja.
-pub const PANORAMA: &str = "refs/heads/insecure/all";
+use worklist_core::git::{
+    cherry_pick_one, cut_commit, git_output, rev_parse, try_git, Picked, ALL_ZEROS, PANORAMA,
+};
 
 /// Si este repo tiene panorama.
 ///
@@ -81,40 +81,6 @@ pub struct Propagated {
     pub panorama_new: String,
 }
 
-fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = crate::git_command(repo)
-        .args(args)
-        .output()
-        .with_context(|| format!("corriendo git {args:?}"))?;
-    if !out.status.success() {
-        bail!("git {args:?} fallo: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    Ok(String::from_utf8(out.stdout)?)
-}
-
-fn try_git(repo: &Path, args: &[&str]) -> Result<(bool, String)> {
-    let out = crate::git_command(repo)
-        .args(args)
-        .output()
-        .with_context(|| format!("corriendo git {args:?}"))?;
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok((out.status.success(), text))
-}
-
-fn rev_parse(repo: &Path, refname: &str) -> Option<String> {
-    let out = crate::git_command(repo).args(["rev-parse", "--verify", "-q", refname]).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
 /// `rename <slug> -> <clave>` o `rename <slug> -> <clave> (N refs)`.
 fn rename_subject(subject: &str) -> Option<(String, String)> {
     let rest = subject.strip_prefix("rename ")?;
@@ -161,57 +127,6 @@ fn sprint_subject(subject: &str) -> Option<(String, String)> {
     Some((id.to_string(), key.to_string()))
 }
 
-/// El commit del corte: el primero que la ventana tiene sobre el panorama.
-///
-/// Todo lo que esta **encima** es trabajo de la ventana; el corte no, porque es
-/// un commit que borra los items que el recorte dejo afuera. Lo usan las dos
-/// direcciones: subir arranca despues del corte, y regenerar lo reemplaza por
-/// uno nuevo y replanta lo que estaba encima.
-pub fn cut_commit(repo: &Path, tip: &str, base_ref: &str) -> Result<String> {
-    let base = git_output(repo, &["merge-base", base_ref, tip])?.trim().to_string();
-    let log = git_output(repo, &["log", "--reverse", "--format=%H%x09%s", &format!("{base}..{tip}")])?;
-    let first = log.lines().next().unwrap_or_default();
-    let (sha, subject) = first.split_once('\t').unwrap_or((first, ""));
-    if !subject.starts_with("window: ") {
-        bail!(
-            "no encuentro el corte de esta ventana: el primer commit sobre el panorama es\n\
-             \x20 {} {subject}\n\
-             \n\
-             sin el corte no se sabe donde empieza el trabajo de la ventana, y propagarlo\n\
-             entero le borraria al panorama todo lo que el recorte dejo afuera.",
-            &sha[..7.min(sha.len())]
-        );
-    }
-    Ok(sha.to_string())
-}
-
-/// Que paso al re-aplicar un commit sobre el HEAD de un worktree.
-pub(crate) enum Picked {
-    Applied,
-    /// El arbol ya lo tenia: la re-aplicacion no aporta nada.
-    Empty,
-    Conflict { files: Vec<String>, output: String },
-}
-
-/// Cherry-pick de un commit, distinguiendo *no aporta nada* de *choca*.
-///
-/// La diferencia se lee del indice y no del codigo de salida: git falla en los
-/// dos casos. Si no quedo nada en conflicto, el commit ya estaba aplicado.
-pub(crate) fn cherry_pick_one(tmp: &Path, sha: &str) -> Result<Picked> {
-    let (ok, output) = try_git(tmp, &["cherry-pick", "--allow-empty", sha])?;
-    if ok {
-        return Ok(Picked::Applied);
-    }
-    let unmerged = git_output(tmp, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
-    if unmerged.trim().is_empty() {
-        let _ = try_git(tmp, &["cherry-pick", "--skip"]);
-        return Ok(Picked::Empty);
-    }
-    let files = unmerged.lines().map(|s| s.to_string()).collect();
-    let _ = try_git(tmp, &["cherry-pick", "--abort"]);
-    Ok(Picked::Conflict { files, output })
-}
-
 /// Los commits que faltan subir, en orden, con su asunto.
 pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(String, String)>)> {
     let from = match rev_parse(repo, &propagated_ref(refname)) {
@@ -243,7 +158,7 @@ pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(St
 /// devolver "entra" fuera aceptar en silencio algo que nadie miro. Ver la task
 /// `77`.
 pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> {
-    if tip == crate::check_push::ALL_ZEROS {
+    if tip == ALL_ZEROS {
         return Ok(Verdict::Applies);
     }
     let Some(panorama) = rev_parse(repo, PANORAMA) else { return Ok(Verdict::NoPanorama) };
@@ -292,7 +207,7 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
 /// ahi entra en el proximo recorte de cada ventana. La ventana queda
 /// adelantada, que es un estado del que se sale reintentando.
 pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: bool) -> Result<Option<Propagated>> {
-    if tip == crate::check_push::ALL_ZEROS {
+    if tip == ALL_ZEROS {
         return Ok(None);
     }
     let panorama_old = match rev_parse(repo, PANORAMA) {
@@ -330,7 +245,7 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
         .unwrap_or_default()
         == PANORAMA;
     if !aca {
-        if let Some(wt) = crate::checked_out_at(repo, PANORAMA) {
+        if let Some(wt) = worklist_core::checked_out_at(repo, PANORAMA) {
             bail!(
                 "{PANORAMA} esta checkouteada en otro worktree y no se puede mover:\n\
                  \x20 {wt}\n\
@@ -371,9 +286,9 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
             // El renombre se rehace: su reescritura es del arbol donde corre, y
             // el panorama tiene un arbol mas grande.
             if let Some((slug, key)) = rename_subject(subject) {
-                match crate::find_file(&tmp, &slug) {
+                match worklist_core::find_file(&tmp, &slug) {
                     Ok(_) => {
-                        let touched = crate::rename_one(&tmp, &slug, &key)?;
+                        let touched = worklist_core::rename_one(&tmp, &slug, &key)?;
                         steps.push(Step::Renamed { slug, key, rewritten: touched.len() });
                     }
                     Err(_) => steps.push(Step::AlreadyRenamed { slug, key }),
@@ -385,15 +300,15 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
             // despues del renombre rehecho, que es el que deja los nombres
             // finales sobre los que esta se recalcula.
             if let Some(key) = normalize_subject(subject) {
-                match crate::find_file(&tmp, &key) {
+                match worklist_core::find_file(&tmp, &key) {
                     Ok((path, _)) => {
                         let text = std::fs::read_to_string(&path)?;
-                        let (_, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                        let (_, canonical) = worklist_core::body::round_trip(&text, base, &tmp)?;
                         if canonical == text {
                             steps.push(Step::AlreadyNormalized { key });
                         } else {
                             std::fs::write(&path, &canonical)?;
-                            crate::commit_all(&tmp, &format!("normalize: {key}"))?;
+                            worklist_core::commit_all(&tmp, &format!("normalize: {key}"))?;
                             steps.push(Step::Normalized { key });
                         }
                     }
@@ -409,7 +324,7 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
                 match std::fs::read_to_string(&path) {
                     Ok(text) if crate::assign::sprint_key(&text).is_none() => {
                         std::fs::write(&path, crate::assign::with_sprint_key(&text, &key)?)?;
-                        crate::commit_all(&tmp, &format!("sprint: {id} -> {key}"))?;
+                        worklist_core::commit_all(&tmp, &format!("sprint: {id} -> {key}"))?;
                         steps.push(Step::SprintKeyed { id, key });
                     }
                     _ => steps.push(Step::AlreadySprintKeyed { id, key }),

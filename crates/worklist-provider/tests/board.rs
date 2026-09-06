@@ -3,8 +3,8 @@
 //! El create-or-find real contra un board necesita permiso explícito — no
 //! corre en CI.
 
-use worklist::port::Op;
-use worklist::board::{dry_run_plan, jira_type, search_text};
+use worklist_provider::port::Op;
+use worklist_provider::board::{dry_run_plan, jira_type, search_text};
 
 /// Ya no hay nada que escapar: el texto de busqueda no puede contener una
 /// comilla, porque no es alfanumerica. La query sale sin metacaracteres en vez
@@ -70,7 +70,7 @@ fn a_failure_in_the_batch_is_a_failure() {
             "totalCount":1,"successCount":0}"#,
     )
     .unwrap();
-    let err = worklist::board::check_batch(&v, Op::SetSummary).unwrap_err().to_string();
+    let err = worklist_provider::board::check_batch(&v, Op::SetSummary).unwrap_err().to_string();
     assert!(err.contains("ACC-16"), "la clave tiene que estar: {err}");
     assert!(err.contains("INVALID_INPUT"), "el motivo tambien: {err}");
 }
@@ -83,7 +83,7 @@ fn a_successful_batch_passes() {
             "totalCount":1,"successCount":1}"#,
     )
     .unwrap();
-    assert!(worklist::board::check_batch(&v, Op::SetSummary).is_ok());
+    assert!(worklist_provider::board::check_batch(&v, Op::SetSummary).is_ok());
 }
 
 /// Un lote mixto falla, y nombra solo al que fallo: el que anduvo no se
@@ -96,7 +96,7 @@ fn a_mixed_batch_names_only_the_one_that_failed() {
             "totalCount":2,"successCount":1}"#,
     )
     .unwrap();
-    let err = worklist::board::check_batch(&v, Op::SetSummary).unwrap_err().to_string();
+    let err = worklist_provider::board::check_batch(&v, Op::SetSummary).unwrap_err().to_string();
     assert!(err.contains("ACC-2"), "{err}");
     assert!(!err.contains("ACC-1"), "el que anduvo no es un problema: {err}");
 }
@@ -106,14 +106,14 @@ fn a_mixed_batch_names_only_the_one_that_failed() {
 #[test]
 fn an_output_without_a_batch_shape_is_not_a_failure() {
     let v: serde_json::Value = serde_json::from_str(r#"{"key":"ACC-14"}"#).unwrap();
-    assert!(worklist::board::check_batch(&v, Op::Create).is_ok());
+    assert!(worklist_provider::board::check_batch(&v, Op::Create).is_ok());
 }
 
 /// Un lote vacio no falla: nada que reportar no es un fracaso.
 #[test]
 fn an_empty_batch_passes() {
     let v: serde_json::Value = serde_json::from_str(r#"{"results":[],"successCount":0}"#).unwrap();
-    assert!(worklist::board::check_batch(&v, Op::SetSummary).is_ok());
+    assert!(worklist_provider::board::check_batch(&v, Op::SetSummary).is_ok());
 }
 
 /// El defecto de `5l`: `*` es un comodin del full-text y `refs/bilink/*`
@@ -178,7 +178,7 @@ fn the_characters_measured_as_safe_survive() {
 /// board.
 #[test]
 fn un_listado_vacio_no_es_un_fracaso() {
-    use worklist::board::listing_survives;
+    use worklist_provider::board::listing_survives;
 
     assert!(listing_survives(true, "6512\tSprint 1\n"), "anduvo y trajo filas");
     assert!(listing_survives(true, ""), "anduvo y no habia nada");
@@ -191,7 +191,7 @@ fn un_listado_vacio_no_es_un_fracaso() {
 #[test]
 fn un_fracaso_con_filas_sigue_siendo_un_fracaso() {
     assert!(
-        !worklist::board::listing_survives(false, "6512\tSprint 1\n"),
+        !worklist_provider::board::listing_survives(false, "6512\tSprint 1\n"),
         "si escribio algo, hay algo que no se esta leyendo"
     );
 }

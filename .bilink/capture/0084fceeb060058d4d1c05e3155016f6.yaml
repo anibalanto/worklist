@@ -1,0 +1,4 @@
+file: crates/worklist-server/src/main.rs
+query: |-
+  (function_item
+    name: (identifier) @n0 (#eq? @n0 "cmd_check_push")) @target

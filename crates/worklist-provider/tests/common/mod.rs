@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
-use worklist::board::{Assignment, Board};
+use worklist_provider::board::{Assignment, Board};
 
 pub fn run(repo: &Path, args: &[&str]) {
     let st = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
@@ -162,17 +162,17 @@ pub fn arbol() -> tempfile::TempDir {
     dir
 }
 
-pub fn resolve(dir: &Path, spy: &Spy) -> worklist::assign::WindowResult {
+pub fn resolve(dir: &Path, spy: &Spy) -> worklist_provider::assign::WindowResult {
     let rev = String::from_utf8(
         Command::new("git").arg("-C").arg(dir).args(["rev-parse", "HEAD"]).output().unwrap().stdout,
     )
     .unwrap()
     .trim()
     .to_string();
-    worklist::assign::assign_window(
+    worklist_provider::assign::assign_window(
         dir,
         "refs/heads/insecure/all",
-        worklist::check_push::ALL_ZEROS,
+        worklist_provider::check_push::ALL_ZEROS,
         &rev,
         "https://x",
         spy,

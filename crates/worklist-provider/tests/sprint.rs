@@ -11,7 +11,7 @@ use std::cell::RefCell;
 
 /// Las claves que el sprint recibio, traducidas de vuelta a los slugs del
 /// worklist: las pruebas hablan de `n` y `o`, no de `ACC-3`.
-fn slugs(res: &worklist::assign::WindowResult, keys: &[String]) -> Vec<String> {
+fn slugs(res: &worklist_provider::assign::WindowResult, keys: &[String]) -> Vec<String> {
     let mut out: Vec<String> = keys
         .iter()
         .map(|k| {
@@ -202,10 +202,10 @@ fn el_id_del_board_llega_a_la_operacion() {
     .unwrap()
     .trim()
     .to_string();
-    worklist::assign::assign_window(
+    worklist_provider::assign::assign_window(
         &repo(&dir),
         "refs/heads/secure/sprint/3",
-        worklist::check_push::ALL_ZEROS,
+        worklist_provider::check_push::ALL_ZEROS,
         &rev,
         "https://x",
         &spy,
@@ -223,14 +223,14 @@ struct ConBoard {
     boards: RefCell<Vec<String>>,
 }
 
-impl worklist::board::Board for ConBoard {
+impl worklist_provider::board::Board for ConBoard {
     fn create_or_find(
         &self,
         title: &str,
         item_type: &str,
         description: &str,
         parent: Option<&str>,
-    ) -> anyhow::Result<worklist::board::Assignment> {
+    ) -> anyhow::Result<worklist_provider::board::Assignment> {
         self.inner.create_or_find(title, item_type, description, parent)
     }
     fn find(&self, title: &str) -> anyhow::Result<Option<String>> {
@@ -291,10 +291,10 @@ fn el_dry_run_no_afirma_cuantos_ya_estaban() {
     .unwrap()
     .trim()
     .to_string();
-    let res = worklist::assign::assign_window(
+    let res = worklist_provider::assign::assign_window(
         &r,
         "refs/heads/insecure/all",
-        worklist::check_push::ALL_ZEROS,
+        worklist_provider::check_push::ALL_ZEROS,
         &head,
         "https://x",
         &spy,
@@ -311,7 +311,7 @@ fn el_dry_run_no_afirma_cuantos_ya_estaban() {
 /// Jira corta en 30, y diez de los veintidos sprints de este repo se pasaban.
 #[test]
 fn el_nombre_del_sprint_entra_en_el_limite_de_jira() {
-    use worklist::assign::{sprint_name, SPRINT_NAME_MAX};
+    use worklist_provider::assign::{sprint_name, SPRINT_NAME_MAX};
 
     let corto = sprint_name("17", Some("Los sprints en el board"));
     assert_eq!(corto, "17 Los sprints en el board", "lo que entra no se toca");
@@ -327,7 +327,7 @@ fn el_nombre_del_sprint_entra_en_el_limite_de_jira() {
 /// produjeran nombres distintos duplicarian el sprint.
 #[test]
 fn el_nombre_recortado_es_el_mismo_todas_las_veces() {
-    use worklist::assign::sprint_name;
+    use worklist_provider::assign::sprint_name;
     let t = Some("La migración, hasta el corte de formato");
     assert_eq!(sprint_name("4", t), sprint_name("4", t));
 }
@@ -335,5 +335,5 @@ fn el_nombre_recortado_es_el_mismo_todas_las_veces() {
 /// Un sprint sin titulo es su numero, y el numero solo nunca se recorta.
 #[test]
 fn sin_titulo_el_nombre_es_el_numero() {
-    assert_eq!(worklist::assign::sprint_name("7", None), "7");
+    assert_eq!(worklist_provider::assign::sprint_name("7", None), "7");
 }

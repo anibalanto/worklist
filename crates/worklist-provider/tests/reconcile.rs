@@ -6,7 +6,7 @@
 mod common;
 
 use common::{arbol, Spy};
-use worklist::assign::reconcile;
+use worklist_provider::assign::reconcile;
 
 const REF: &str = "refs/heads/insecure/all";
 

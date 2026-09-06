@@ -47,7 +47,7 @@ pub fn classify(refname: &str) -> RefClass {
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = crate::git_command(repo)
+    let out = worklist_core::git_command(repo)
         .args(args)
         .output()
         .with_context(|| format!("corriendo git {:?}", args))?;
@@ -134,8 +134,8 @@ pub fn check_one(
             // Se compara **markdown contra markdown**: lo guardado es la vuelta
             // del round-trip, asi que el archivo del tip es lo que el proveedor
             // deberia tener. Convertir de un solo lado alcanza.
-            let Ok(live_body) = crate::body::adf_to_body(live_adf) else { continue };
-            let (_, tip_body) = crate::body::split_frontmatter(&text);
+            let Ok(live_body) = worklist_core::body::adf_to_body(live_adf) else { continue };
+            let (_, tip_body) = worklist_core::body::split_frontmatter(&text);
             if live_body.trim() != tip_body.trim() {
                 out.push(RejectedKey {
                     key: key.clone(),

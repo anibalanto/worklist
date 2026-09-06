@@ -45,7 +45,7 @@ fn rename_sin_referencias_entrantes() {
     run(repo, &["add", "-A"]);
     run(repo, &["commit", "-q", "-m", "seed"]);
 
-    let touched = worklist::rename_one(repo, "slug-solo", "ACC-1").unwrap();
+    let touched = worklist_core::rename_one(repo, "slug-solo", "ACC-1").unwrap();
     assert!(touched.is_empty());
     assert!(repo.join("ACC-1.task.md").exists());
     assert!(!repo.join("slug-solo.task.md").exists());
@@ -73,7 +73,7 @@ fn rename_reescribe_referencias_delimitadas_y_no_subcadenas() {
     run(repo, &["add", "-A"]);
     run(repo, &["commit", "-q", "-m", "seed"]);
 
-    let touched = worklist::rename_one(repo, "slug-a", "ACC-101").unwrap();
+    let touched = worklist_core::rename_one(repo, "slug-a", "ACC-101").unwrap();
     assert_eq!(touched, vec!["slug-b.task.md".to_string()]);
 
     let b = std::fs::read_to_string(repo.join("slug-b.task.md")).unwrap();
@@ -105,7 +105,7 @@ fn resolve_batch_respeta_el_orden_topologico() {
     let mut map = HashMap::new();
     map.insert("slug-c".to_string(), "ACC-201".to_string());
     map.insert("slug-d".to_string(), "ACC-200".to_string());
-    worklist::resolve_batch(repo, &map).unwrap();
+    worklist_core::resolve_batch(repo, &map).unwrap();
 
     let c = std::fs::read_to_string(repo.join("ACC-201.task.md")).unwrap();
     assert!(c.contains("relation.depends: [ACC-200]"));
@@ -133,7 +133,7 @@ fn un_ciclo_se_rechaza_sin_escribir_nada() {
     let mut map = HashMap::new();
     map.insert("slug-e".to_string(), "ACC-301".to_string());
     map.insert("slug-f".to_string(), "ACC-302".to_string());
-    let result = worklist::resolve_batch(repo, &map);
+    let result = worklist_core::resolve_batch(repo, &map);
 
     assert!(result.is_err());
     assert_eq!(before, head(repo), "el repo no debia cambiar");
@@ -147,7 +147,7 @@ fn un_ciclo_se_rechaza_sin_escribir_nada() {
 #[test]
 fn renaming_the_parent_keeps_the_newline() {
     let text = "---\ntitle: X\nparent: 1\n---\n\n# X\n\ncuerpo\n";
-    let (out, changed) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
+    let (out, changed) = worklist_core::rewrite_references(text, "1", "epic", "ACC-14");
     assert!(changed);
     assert_eq!(out, "---\ntitle: X\nparent: ACC-14\n---\n\n# X\n\ncuerpo\n");
 }
@@ -158,8 +158,8 @@ fn renaming_the_parent_keeps_the_newline() {
 #[test]
 fn the_frontmatter_still_splits_after_renaming_the_parent() {
     let text = "---\ntitle: X\nstatus: done\nparent: 1\n---\n\n# X\n\ncuerpo\n";
-    let (out, _) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
-    let (fm, body) = worklist::body::split_frontmatter(&out);
+    let (out, _) = worklist_core::rewrite_references(text, "1", "epic", "ACC-14");
+    let (fm, body) = worklist_core::body::split_frontmatter(&out);
     assert!(fm.contains("parent: ACC-14"), "el frontmatter es el frontmatter: {fm:?}");
     assert!(!fm.is_empty(), "no se separo nada: todo el archivo seria cuerpo");
     assert_eq!(body, "\n# X\n\ncuerpo\n", "y el cuerpo es solo el cuerpo");
@@ -170,7 +170,7 @@ fn the_frontmatter_still_splits_after_renaming_the_parent() {
 #[test]
 fn renaming_a_parent_in_the_middle_does_not_glue_the_next_line() {
     let text = "---\ntitle: X\nparent: 1\nstatus: done\n---\n\ncuerpo\n";
-    let (out, _) = worklist::rewrite_references(text, "1", "epic", "ACC-14");
+    let (out, _) = worklist_core::rewrite_references(text, "1", "epic", "ACC-14");
     assert!(out.contains("parent: ACC-14\nstatus: done"), "{out:?}");
 }
 
@@ -179,7 +179,7 @@ fn renaming_a_parent_in_the_middle_does_not_glue_the_next_line() {
 #[test]
 fn renaming_a_slug_does_not_touch_one_that_ends_with_it() {
     let text = "---\ntitle: k\nrelation.depends: [2j]\n---\n\ncuerpo\n";
-    let (out, changed) = worklist::rewrite_references(text, "j", "user-story", "ACC-77");
+    let (out, changed) = worklist_core::rewrite_references(text, "j", "user-story", "ACC-77");
     assert!(!changed, "no habia ninguna referencia a `j`");
     assert!(out.contains("[2j]"), "quedo intacto: {out:?}");
 }
@@ -189,7 +189,7 @@ fn renaming_a_slug_does_not_touch_one_that_ends_with_it() {
 #[test]
 fn the_right_slug_is_rewritten_with_a_lookalike_next_to_it() {
     let text = "---\ntitle: k\nrelation.depends: [2j, j]\n---\n\ncuerpo\n";
-    let (out, changed) = worklist::rewrite_references(text, "j", "user-story", "ACC-77");
+    let (out, changed) = worklist_core::rewrite_references(text, "j", "user-story", "ACC-77");
     assert!(changed);
     assert!(out.contains("[2j, ACC-77]"), "{out:?}");
 }
@@ -200,7 +200,7 @@ fn the_right_slug_is_rewritten_with_a_lookalike_next_to_it() {
 #[test]
 fn two_adjacent_references_are_both_rewritten() {
     let text = "---\ntitle: x\nrelation.depends: [j,j]\n---\n\ncuerpo\n";
-    let (out, _) = worklist::rewrite_references(text, "j", "task", "ACC-77");
+    let (out, _) = worklist_core::rewrite_references(text, "j", "task", "ACC-77");
     assert_eq!(out.matches("ACC-77").count(), 2, "las dos: {out:?}");
     assert!(!out.contains(",j]"), "no quedo ninguna sin reescribir: {out:?}");
 }
@@ -210,7 +210,7 @@ fn two_adjacent_references_are_both_rewritten() {
 #[test]
 fn a_slug_at_the_start_of_the_field_is_rewritten() {
     let text = "---\ntitle: x\nrelation.depends: j\n---\n\ncuerpo\n";
-    let (out, changed) = worklist::rewrite_references(text, "j", "task", "ACC-77");
+    let (out, changed) = worklist_core::rewrite_references(text, "j", "task", "ACC-77");
     assert!(changed);
     assert!(out.contains("relation.depends: ACC-77"), "{out:?}");
 }
@@ -226,7 +226,7 @@ fn a_slug_at_the_start_of_the_field_is_rewritten() {
 #[test]
 fn renaming_rewrites_the_sprint_items_field() {
     let text = "---\ntitle: El sprint\nstatus: open\nitems: [4h, 4j, 4i]\n---\n\nplan\n";
-    let (out, changed) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    let (out, changed) = worklist_core::rewrite_references(text, "4h", "task", "ACC-94");
     assert!(changed);
     assert!(out.contains("items: [ACC-94, 4j, 4i]"), "{out:?}");
 }
@@ -235,7 +235,7 @@ fn renaming_rewrites_the_sprint_items_field() {
 #[test]
 fn the_items_field_respects_word_boundaries() {
     let text = "---\ntitle: x\nitems: [4hh, 4h]\n---\n\nplan\n";
-    let (out, _) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    let (out, _) = worklist_core::rewrite_references(text, "4h", "task", "ACC-94");
     assert!(out.contains("items: [4hh, ACC-94]"), "{out:?}");
 }
 
@@ -244,7 +244,7 @@ fn the_items_field_respects_word_boundaries() {
 #[test]
 fn a_link_with_dotdot_is_rewritten_keeping_the_prefix() {
     let text = "- [`4h` El titulo](../4h.task.md)\n";
-    let (out, changed) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    let (out, changed) = worklist_core::rewrite_references(text, "4h", "task", "ACC-94");
     assert!(changed);
     assert_eq!(out, "- [`ACC-94` El titulo](../ACC-94.task.md)\n");
 }
@@ -253,7 +253,7 @@ fn a_link_with_dotdot_is_rewritten_keeping_the_prefix() {
 #[test]
 fn a_link_with_two_levels_keeps_them_both() {
     let text = "ver [`4h`](../../4h.task.md)\n";
-    let (out, _) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    let (out, _) = worklist_core::rewrite_references(text, "4h", "task", "ACC-94");
     assert_eq!(out, "ver [`ACC-94`](../../ACC-94.task.md)\n");
 }
 
@@ -261,7 +261,7 @@ fn a_link_with_two_levels_keeps_them_both() {
 #[test]
 fn a_link_without_prefix_stays_without_it() {
     let text = "ver [`4h`](4h.task.md)\n";
-    let (out, _) = worklist::rewrite_references(text, "4h", "task", "ACC-94");
+    let (out, _) = worklist_core::rewrite_references(text, "4h", "task", "ACC-94");
     assert_eq!(out, "ver [`ACC-94`](ACC-94.task.md)\n");
 }
 
@@ -291,7 +291,7 @@ fn renaming_reaches_files_in_subdirectories() {
     g(&["add", "-A"]);
     g(&["commit", "-qm", "seed"]);
 
-    let touched = worklist::rename_one(r, "4h", "ACC-94").unwrap();
+    let touched = worklist_core::rename_one(r, "4h", "ACC-94").unwrap();
     assert!(
         touched.iter().any(|t| t.contains("10.sprint.md")),
         "el sprint tiene que estar entre los tocados: {touched:?}"

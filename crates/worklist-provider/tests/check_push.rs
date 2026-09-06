@@ -3,8 +3,8 @@
 
 use std::path::Path;
 use std::process::Command;
-use worklist::check_push::check_one;
-use worklist::provider::FileProvider;
+use worklist_provider::check_push::check_one;
+use worklist_provider::provider::FileProvider;
 
 fn run(repo: &Path, args: &[&str]) {
     let status = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
@@ -84,7 +84,7 @@ fn una_rama_nueva_sin_tip_anterior_no_se_chequea() {
 
 #[test]
 fn las_tres_clases_de_rama_se_distinguen_por_el_prefijo() {
-    use worklist::check_push::{classify, RefClass};
+    use worklist_provider::check_push::{classify, RefClass};
     assert_eq!(classify("refs/heads/secure/sprint/10"), RefClass::Secure);
     assert_eq!(classify("refs/heads/insecure/all"), RefClass::Insecure);
     assert_eq!(classify("refs/heads/insecure/backlog"), RefClass::Insecure);
@@ -113,7 +113,7 @@ fn una_insegura_no_se_verifica_aunque_el_proveedor_se_haya_movido() {
 // viajar, y esto es lo que cierra el hueco.
 
 use std::collections::HashMap;
-use worklist::provider::{Provider, Snapshot};
+use worklist_provider::provider::{Provider, Snapshot};
 
 /// Un proveedor que sí informa título y cuerpo, como Jira.
 struct Rico(HashMap<String, Snapshot>);
@@ -125,7 +125,7 @@ impl Provider for Rico {
 }
 
 fn adf(texto: &str) -> String {
-    worklist::body::body_to_adf(texto).unwrap()
+    worklist_core::body::body_to_adf(texto).unwrap()
 }
 
 /// Un repo con un ítem cuyo cuerpo se conoce, y un push que lo toca.

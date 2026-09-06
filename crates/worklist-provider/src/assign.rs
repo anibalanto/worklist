@@ -76,7 +76,7 @@ pub struct SprintResult {
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = crate::git_command(repo)
+    let out = worklist_core::git_command(repo)
         .args(args)
         .output()
         .with_context(|| format!("corriendo git {args:?}"))?;
@@ -178,7 +178,7 @@ pub fn changed_keys(repo: &Path, old: &str, new_rev: &str) -> Result<Vec<String>
 }
 
 fn split_item_name(name: &str) -> Option<(String, String)> {
-    for t in crate::TYPES {
+    for t in worklist_core::TYPES {
         if let Some(stem) = name.strip_suffix(&format!(".{t}.md")) {
             // sin directorios: los items viven en la raiz
             if stem.contains('/') {
@@ -233,14 +233,14 @@ pub fn assign_window(
     let _ = std::fs::remove_dir_all(&tmp);
     git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), new_rev])?;
     let result = (|| -> Result<WindowResult> {
-        let order = crate::topo_order(&tmp, &slugs)?;
+        let order = worklist_core::topo_order(&tmp, &slugs)?;
 
         // La jerarquia se lee una vez, antes de crear nada: el `--parent` de un
         // item es su epica ancestro, y para saberla hay que tener la cadena
         // entera. Ver `concepts/sync.md`.
         let mut parents: HashMap<String, String> = HashMap::new();
         for slug in &slugs {
-            let (path, _) = crate::find_file(&tmp, slug)?;
+            let (path, _) = worklist_core::find_file(&tmp, slug)?;
             if let Some(p) = parent_of(&std::fs::read_to_string(&path)?) {
                 parents.insert(slug.clone(), p);
             }
@@ -260,12 +260,12 @@ pub fn assign_window(
         // ── Pasada 2: los cuerpos, ya con todos los nombres finales puestos.
         if !dry_run {
             for a in assigned.iter_mut() {
-                let (path, _) = crate::find_file(&tmp, &a.key)?;
+                let (path, _) = worklist_core::find_file(&tmp, &a.key)?;
                 let text = std::fs::read_to_string(&path)?;
-                let (adf, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                let (adf, canonical) = worklist_core::body::round_trip(&text, base, &tmp)?;
                 if canonical != text {
                     std::fs::write(&path, &canonical)?;
-                    crate::commit_all(&tmp, &format!("normalize: {}", a.key))?;
+                    worklist_core::commit_all(&tmp, &format!("normalize: {}", a.key))?;
                     a.normalized = true;
                 }
                 board.set_description(&a.key, &adf)?;
@@ -278,7 +278,7 @@ pub fn assign_window(
         let mut untranslated = Vec::new();
         if !dry_run {
             for a in &assigned {
-                let (path, _) = crate::find_file(&tmp, &a.key)?;
+                let (path, _) = worklist_core::find_file(&tmp, &a.key)?;
                 let text = std::fs::read_to_string(&path)?;
                 for dep in depends_of(&text) {
                     // Los `depends` de adentro llegan traducidos: el renombre
@@ -287,7 +287,7 @@ pub fn assign_window(
                     // informa y se sigue: exigir que toda dependencia caiga
                     // adentro seria pedirle al backlog que se ordene por el
                     // recorte. Ver `concepts/sync.md`.
-                    if crate::is_unassigned(&dep) {
+                    if worklist_core::is_unassigned(&dep) {
                         untranslated.push((dep, a.key.clone()));
                         continue;
                     }
@@ -324,16 +324,16 @@ pub fn assign_window(
                 if recien.contains(&key.as_str()) {
                     continue;
                 }
-                let Ok((path, _)) = crate::find_file(&tmp, key) else {
+                let Ok((path, _)) = worklist_core::find_file(&tmp, key) else {
                     // Se borro en este mismo push: no hay cuerpo que subir, y
                     // borrar el issue no es de este comando.
                     continue;
                 };
                 let text = std::fs::read_to_string(&path)?;
-                let (adf, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                let (adf, canonical) = worklist_core::body::round_trip(&text, base, &tmp)?;
                 if canonical != text {
                     std::fs::write(&path, &canonical)?;
-                    crate::commit_all(&tmp, &format!("normalize: {key}"))?;
+                    worklist_core::commit_all(&tmp, &format!("normalize: {key}"))?;
                 }
                 board.set_description(key, &adf)?;
                 if let Some(title) = title_of(&canonical) {
@@ -420,7 +420,7 @@ pub(crate) fn resolve_sprint(
         None => {
             let (k, created) = board.create_or_find_sprint(board_id, &nombre)?;
             std::fs::write(&path, with_sprint_key(&text, &k)?)?;
-            crate::commit_all(tmp, &format!("sprint: {id} -> {k}"))?;
+            worklist_core::commit_all(tmp, &format!("sprint: {id} -> {k}"))?;
             (k, created)
         }
     };
@@ -510,7 +510,7 @@ fn sprint_members(dir: &Path, declared: &[String]) -> Result<Vec<String>> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let Some(id) = crate::TYPES
+        let Some(id) = worklist_core::TYPES
             .iter()
             .filter(|t| **t != "sprint")
             .find_map(|t| name.strip_suffix(&format!(".{t}.md")))
@@ -613,7 +613,7 @@ fn assign_and_rename(
     let mut assigned: Vec<Assigned> = Vec::new();
     for slug in order {
         let item_type = &types[slug];
-        let (path, _) = crate::find_file(tmp, slug)?;
+        let (path, _) = worklist_core::find_file(tmp, slug)?;
         let text = std::fs::read_to_string(&path)?;
         let title = title_of(&text).unwrap_or_else(|| slug.clone());
 
@@ -622,7 +622,7 @@ fn assign_and_rename(
         let parent_key = epic_slug.as_ref().and_then(|e| {
             // La epica ya cruzo: su nombre **es** la clave, y no hay nada que
             // buscar en lo asignado de esta corrida. Ver `7p`.
-            if !crate::is_unassigned(e) {
+            if !worklist_core::is_unassigned(e) {
                 return Some(e.clone());
             }
             assigned.iter().find(|a: &&Assigned| &a.slug == e).map(|a| a.key.clone())
@@ -654,7 +654,7 @@ fn assign_and_rename(
             _ => false,
         };
 
-        let touched = crate::rename_one(tmp, slug, &key)?;
+        let touched = worklist_core::rename_one(tmp, slug, &key)?;
         // La clave ya existe del otro lado: que el panorama lo sepa ahora, y
         // no dentro de ochenta items. Ver la task `7k`.
         ancla.avanzar(tmp);
@@ -740,7 +740,7 @@ pub fn bootstrap(
     let mut ancla = Ancla::new(repo, refname, &head, !aca);
 
     let result = (|| -> Result<(Vec<String>, Vec<Assigned>, Vec<SprintResult>, String)> {
-        let mut order = crate::topo_order(&tmp, &slugs)?;
+        let mut order = worklist_core::topo_order(&tmp, &slugs)?;
         // El corte va **despues** del orden topologico, no antes: un lote puede
         // dejar una epica creada y sus tasks sin crear —estado valido, porque
         // el `--parent` se pone al crear cada task y la epica ya tiene clave—
@@ -751,7 +751,7 @@ pub fn bootstrap(
         // La cadena de `parent` se arma sobre el arbol entero, por lo mismo.
         let mut parents: HashMap<String, String> = HashMap::new();
         for (id, _) in types.iter() {
-            let Ok((path, _)) = crate::find_file(&tmp, id) else { continue };
+            let Ok((path, _)) = worklist_core::find_file(&tmp, id) else { continue };
             if let Some(p) = parent_of(&std::fs::read_to_string(&path)?) {
                 parents.insert(id.clone(), p);
             }
@@ -760,12 +760,12 @@ pub fn bootstrap(
             assign_and_rename(&tmp, &order, &types, &parents, board, dry_run, &mut ancla)?;
         if !dry_run {
             for a in assigned.iter_mut().filter(|a| a.created) {
-                let (path, _) = crate::find_file(&tmp, &a.key)?;
+                let (path, _) = worklist_core::find_file(&tmp, &a.key)?;
                 let text = std::fs::read_to_string(&path)?;
-                let (adf, canonical) = crate::body::round_trip(&text, base, &tmp)?;
+                let (adf, canonical) = worklist_core::body::round_trip(&text, base, &tmp)?;
                 if canonical != text {
                     std::fs::write(&path, &canonical)?;
-                    crate::commit_all(&tmp, &format!("normalize: {}", a.key))?;
+                    worklist_core::commit_all(&tmp, &format!("normalize: {}", a.key))?;
                     a.normalized = true;
                     ancla.avanzar(&tmp);
                 }
@@ -864,11 +864,11 @@ pub fn reconcile(
     let result = (|| -> Result<(Vec<Adopted>, Vec<Missing>, String)> {
         // Topologico por lo mismo que en el bootstrap: el renombre de una
         // epica reescribe lo que cuelga de ella.
-        let order = crate::topo_order(&tmp, &slugs)?;
+        let order = worklist_core::topo_order(&tmp, &slugs)?;
         let mut adopted = Vec::new();
         let mut missing = Vec::new();
         for slug in &order {
-            let (path, _) = crate::find_file(&tmp, slug)?;
+            let (path, _) = worklist_core::find_file(&tmp, slug)?;
             let text = std::fs::read_to_string(&path)?;
             let title = title_of(&text).unwrap_or_else(|| slug.clone());
             match board.find(&title)? {
@@ -877,7 +877,7 @@ pub fn reconcile(
                     let rewritten = if dry_run {
                         0
                     } else {
-                        crate::rename_one(&tmp, slug, &key)?.len()
+                        worklist_core::rename_one(&tmp, slug, &key)?.len()
                     };
                     adopted.push(Adopted { slug: slug.clone(), key, rewritten });
                 }
@@ -983,7 +983,7 @@ fn worktree_para(
             .unwrap_or_default()
             == refname;
     if !aca {
-        if let Some(wt) = crate::checked_out_at(repo, refname) {
+        if let Some(wt) = worklist_core::checked_out_at(repo, refname) {
             bail!(
                 "{refname} esta checkouteada en otro worktree y no se puede mover:\n\
                  \x20 {wt}\n\

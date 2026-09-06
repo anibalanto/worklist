@@ -3,13 +3,13 @@ use clap::{Parser, Subcommand};
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::Command;
-use worklist::check_push::{check_one, classify, RefClass};
-use worklist::board::{dry_run_plan, JiraBoard, Board};
-use worklist::propagate::Verdict;
-use worklist::provider::FileProvider;
+use worklist_provider::check_push::{check_one, classify, RefClass};
+use worklist_provider::board::{dry_run_plan, JiraBoard, Board};
+use worklist_provider::propagate::Verdict;
+use worklist_provider::provider::FileProvider;
 
 #[derive(Parser)]
-#[command(name = "worklist")]
+#[command(name = "worklist-server", version)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -29,11 +29,6 @@ enum Cmd {
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo de pre-receive.
         #[arg(long)]
         stdin: bool,
-    },
-    /// Recorta una ventana: la rama con los items de un sprint y nada mas.
-    Window {
-        #[command(subcommand)]
-        sub: WindowCmd,
     },
     /// Manipula el proveedor de prueba directamente, sin pasar por git.
     Provider {
@@ -129,6 +124,27 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Escribe `hooks/pre-receive` y `hooks/post-receive` del bare, apuntando
+    /// al binario que los esta escribiendo. Ver `commands/install-hooks.md`.
+    InstallHooks {
+        /// El bare del servidor. Los hooks van en `<repo>/hooks/`.
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        project: String,
+        /// El id del board. **Obligatorio y sin default**, por lo mismo que en
+        /// `assign-keys`: una pasada que se saltea sola porque falta
+        /// configuracion es la peor forma de enterarse de que falta.
+        #[arg(long = "board")]
+        board_id: String,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        /// Sobrescribe un hook que ya existe.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Busca un issue por titulo antes de crear, para no duplicar en un reintento.
     CreateOrFind {
         #[arg(long)]
@@ -141,21 +157,6 @@ enum Cmd {
         titulo: String,
         #[arg(long)]
         dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum WindowCmd {
-    Open {
-        sprint_id: String,
-        #[arg(long, default_value = "insecure/all")]
-        from: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// No replanta: el corte nuevo reemplaza a la ventana, descartando
-        /// lo que tenia encima. Ver `commands/window-open.md`.
-        #[arg(long)]
-        force: bool,
     },
 }
 
@@ -184,18 +185,6 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Window { sub: WindowCmd::Open { sprint_id, from, dry_run, force } } => {
-            let repo = std::env::current_dir()?;
-            let (files, head) = worklist::window::open(&repo, &sprint_id, &from, dry_run, force)?;
-            println!("secure/sprint/{sprint_id}: {} archivo(s)", files.len());
-            for f in &files {
-                println!("  {f}");
-            }
-            if !dry_run {
-                println!("recortado desde {from} -> {}", short(&head));
-            }
-            Ok(())
-        }
         Cmd::AssignKeys { project, board, base, stdin, window, all_windows, dry_run } => {
             cmd_assign_keys(project, board, base, stdin, &window, all_windows, dry_run)
         }
@@ -207,6 +196,9 @@ fn main() -> Result<()> {
         }
         Cmd::Propagate { stdin, window, all_windows, base, dry_run } => {
             cmd_propagate(stdin, &window, all_windows, &base, dry_run)
+        }
+        Cmd::InstallHooks { repo, project, board_id, base, force, dry_run } => {
+            cmd_install_hooks(&repo, &project, &board_id, &base, force, dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
             cmd_create_or_find(project, r#type, source, titulo, dry_run)
@@ -233,7 +225,7 @@ fn cmd_create_or_find(
         println!("{}", dry_run_plan(&project, &item_type, &titulo, &description)?);
         return Ok(());
     }
-    worklist::port::preflight()?;
+    worklist_provider::port::preflight()?;
     let board = JiraBoard::new(project);
     // Sin `--parent`: este comando resuelve un item suelto, y la jerarquia la
     // calcula `assign-keys` sobre la ventana entera.
@@ -255,7 +247,7 @@ fn cmd_assign_keys(
     // del puerto no existe, y enterarse con una ventana a medio resolver es la
     // peor forma. `--dry-run` no habla con nadie, asi que no la pide.
     if !dry_run {
-        worklist::port::preflight()?;
+        worklist_provider::port::preflight()?;
     }
     let repo = std::env::current_dir()?;
     let board = JiraBoard::new(project);
@@ -267,18 +259,18 @@ fn cmd_assign_keys(
     };
     // Una vez, antes del lote: que falte el panorama es del repo, no de cada
     // ventana. Ver la task `77`.
-    let hay_panorama = worklist::propagate::has_panorama(&repo);
+    let hay_panorama = worklist_provider::propagate::has_panorama(&repo);
     if !hay_panorama {
         println!(
             "aviso: este repo no tiene {} — lo que se resuelva no sube a ningun lado",
-            worklist::propagate::PANORAMA
+            worklist_core::git::PANORAMA
         );
     }
     for (old, new, refname) in lines {
         if classify(&refname) != RefClass::Secure {
             continue;
         }
-        let r = worklist::assign::assign_window(
+        let r = worklist_provider::assign::assign_window(
             &repo, &refname, &old, &new, &base, &board, &board_id, dry_run,
         )?;
         let Some(r) = r else {
@@ -353,7 +345,7 @@ fn cmd_assign_keys(
         // adelantada del panorama, que es un estado del que se sale
         // reintentando con `worklist propagate`.
         if hay_panorama {
-            match worklist::propagate::propagate(&repo, &r.refname, &r.new_head, &base, dry_run) {
+            match worklist_provider::propagate::propagate(&repo, &r.refname, &r.new_head, &base, dry_run) {
                 Ok(Some(p)) => report_propagated(&p, dry_run),
                 Ok(None) => {}
                 Err(e) => println!("  ! el panorama no avanzo: {e}"),
@@ -377,11 +369,11 @@ fn cmd_bootstrap(
     dry_run: bool,
 ) -> Result<()> {
     if !dry_run {
-        worklist::port::preflight()?;
+        worklist_provider::port::preflight()?;
     }
     let repo = std::env::current_dir()?;
     let board = JiraBoard::new(project);
-    let Some(r) = worklist::assign::bootstrap(&repo, &refname, &base, &board, &board_id, limit, dry_run)? else {
+    let Some(r) = worklist_provider::assign::bootstrap(&repo, &refname, &base, &board, &board_id, limit, dry_run)? else {
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
     };
@@ -444,10 +436,10 @@ fn cmd_bootstrap(
 
 /// Adopta lo que ya existe del otro lado, sin crear nada.
 fn cmd_reconcile(project: String, refname: String, dry_run: bool) -> Result<()> {
-    worklist::port::preflight()?;
+    worklist_provider::port::preflight()?;
     let repo = std::env::current_dir()?;
     let board = JiraBoard::new(project);
-    let Some(r) = worklist::assign::reconcile(&repo, &refname, &board, dry_run)? else {
+    let Some(r) = worklist_provider::assign::reconcile(&repo, &refname, &board, dry_run)? else {
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
     };
@@ -487,18 +479,18 @@ fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, base: &str,
     } else {
         read_hook_lines(&repo, stdin)?
     };
-    if !worklist::propagate::has_panorama(&repo) {
+    if !worklist_provider::propagate::has_panorama(&repo) {
         anyhow::bail!(
             "este repo no tiene {} — no hay a donde propagar.\n\
              Corre esto parado en el repo donde vive el panorama.",
-            worklist::propagate::PANORAMA
+            worklist_core::git::PANORAMA
         );
     }
     for (_, new, refname) in lines {
         if classify(&refname) != RefClass::Secure {
             continue;
         }
-        match worklist::propagate::propagate(&repo, &refname, &new, base, dry_run)? {
+        match worklist_provider::propagate::propagate(&repo, &refname, &new, base, dry_run)? {
             Some(p) => report_propagated(&p, dry_run),
             None => println!("{refname}: el panorama ya tiene todo lo suyo"),
         }
@@ -506,8 +498,8 @@ fn cmd_propagate(stdin: bool, windows: &[String], all_windows: bool, base: &str,
     Ok(())
 }
 
-fn report_propagated(p: &worklist::propagate::Propagated, dry_run: bool) {
-    use worklist::propagate::Step;
+fn report_propagated(p: &worklist_provider::propagate::Propagated, dry_run: bool) {
+    use worklist_provider::propagate::Step;
     let verbo = if dry_run { "subiria" } else { "sube" };
     println!("{}: {verbo} {} commit(s) al panorama", p.refname, p.steps.len());
     for step in &p.steps {
@@ -647,11 +639,11 @@ fn cmd_check_push(
 ) -> Result<()> {
     // Uno de los dos, y el de prueba solo informa el status: con el, el cuerpo
     // y el titulo no se comparan. Ver `concepts/sync.md`.
-    let provider: Box<dyn worklist::provider::Provider> = match (provider_file, project) {
+    let provider: Box<dyn worklist_provider::provider::Provider> = match (provider_file, project) {
         (Some(f), None) => Box::new(FileProvider::new(f)),
         (None, Some(p)) => {
-            worklist::port::preflight()?;
-            Box::new(worklist::provider::JiraProvider::new(p))
+            worklist_provider::port::preflight()?;
+            Box::new(worklist_provider::provider::JiraProvider::new(p))
         }
         _ => anyhow::bail!("hace falta --provider-file o --project, y no los dos"),
     };
@@ -696,13 +688,13 @@ fn cmd_check_push(
         // Y lo mismo contra el panorama: de `all` se corta todo, asi que un
         // conflicto escrito ahi entra en el proximo recorte de cada ventana.
         // Probarlo aca es lo que evita tener que anotarlo alla.
-        match worklist::propagate::would_conflict(&repo, &refname, &new)? {
+        match worklist_provider::propagate::would_conflict(&repo, &refname, &new)? {
             Verdict::Applies => {}
             // No poder probar no es que entre. Aceptar en silencio seria decir
             // que se verifico algo que nadie miro. Ver la task `77`.
             Verdict::NoPanorama => println!(
                 "aviso: {refname} no se pudo probar contra el panorama — este repo no tiene {}",
-                worklist::propagate::PANORAMA
+                worklist_core::git::PANORAMA
             ),
             Verdict::Conflict { sha, subject, files } => {
                 any_rejected = true;
@@ -780,4 +772,65 @@ mod tests {
         assert_eq!(refs[1], "refs/heads/secure/sprint/2");
         assert_eq!(refs[2], "refs/heads/secure/to-work");
     }
+}
+
+/// Escribe los hooks del bare apuntando **al binario que los esta escribiendo**.
+///
+/// El path lo resuelve `current_exe` y no lo tipea nadie, que es la unica parte
+/// que puede estar mal: un hook apunto una vez a un `target/debug` viejo, y eso
+/// es un fix verde en los tests y ausente en produccion — los tests corren la
+/// lib, no el hook. Ver `commands/install-hooks.md`.
+fn cmd_install_hooks(
+    repo: &std::path::Path,
+    project: &str,
+    board_id: &str,
+    base: &str,
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let exe = std::env::current_exe()
+        .context("no puedo resolver mi propio path, asi que no hay que escribir en los hooks")?;
+    let exe = exe.canonicalize().unwrap_or(exe);
+    let exe = exe.display();
+
+    let hooks = repo.join("hooks");
+    if !hooks.is_dir() {
+        anyhow::bail!("{} no tiene hooks/: no es un bare", repo.display());
+    }
+
+    let pre = format!(
+        "#!/bin/sh\n\
+         # generado por worklist-server install-hooks — no editar\n\
+         exec {exe} check-push --stdin --project {project}\n"
+    );
+    // Las dos pasadas en orden, y **para en la primera que falle**: propagar lo
+    // que `assign-keys` no llego a resolver subiria al panorama un estado a
+    // medias.
+    let post = format!(
+        "#!/bin/sh\n\
+         # generado por worklist-server install-hooks — no editar\n\
+         set -e\n\
+         {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}\n\
+         {exe} propagate --stdin --base {base}\n"
+    );
+
+    for (name, body) in [("pre-receive", &pre), ("post-receive", &post)] {
+        let path = hooks.join(name);
+        if dry_run {
+            println!("--- hooks/{name} ---");
+            print!("{body}");
+            continue;
+        }
+        if path.exists() && !force {
+            anyhow::bail!("hooks/{name} ya existe — `--force` para sobrescribirlo");
+        }
+        std::fs::write(&path, body).with_context(|| format!("escribiendo hooks/{name}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+        }
+        println!("hooks/{name:<12} -> {exe}");
+    }
+    Ok(())
 }

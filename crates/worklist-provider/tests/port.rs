@@ -1,7 +1,7 @@
 //! El puerto: el reparto de transporte, la forma unica de un fallo, y que la
 //! credencial que falta se nombre por su nombre.
 
-use worklist::port::{missing, Failure, Op, Transport, TOKEN_ENV};
+use worklist_provider::port::{missing, Failure, Op, Transport, TOKEN_ENV};
 
 /// El reparto de `concepts/sync.md` seccion "El reparto, escrito una vez",
 /// fila por fila. Si la tabla cambia, este test es el que lo dice.

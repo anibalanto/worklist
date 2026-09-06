@@ -11,7 +11,7 @@ use common::{arbol, item, resolve, run, Spy};
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
-use worklist::board::Board;
+use worklist_provider::board::Board;
 
 /// El `--parent` de una task **no** es su user story: es la epica, por lejos
 /// que quede. Jira rechaza `Tarea` bajo `Historia`.
@@ -115,10 +115,10 @@ fn a_cycle_in_the_parents_is_reported_before_touching_the_provider() {
     .unwrap()
     .trim()
     .to_string();
-    let err = worklist::assign::assign_window(
+    let err = worklist_provider::assign::assign_window(
         r,
         "refs/heads/insecure/all",
-        worklist::check_push::ALL_ZEROS,
+        worklist_provider::check_push::ALL_ZEROS,
         &rev,
         "https://x",
         &spy,
@@ -207,9 +207,9 @@ fn rev(r: &Path, what: &str) -> String {
     .to_string()
 }
 
-fn resolver(r: &Path, old: &str, spy: &Spy) -> Option<worklist::assign::WindowResult> {
+fn resolver(r: &Path, old: &str, spy: &Spy) -> Option<worklist_provider::assign::WindowResult> {
     let new = rev(r, "HEAD");
-    worklist::assign::assign_window(
+    worklist_provider::assign::assign_window(
         r, "refs/heads/secure/sprint/1", old, &new, "https://x", spy, "701", false,
     )
     .unwrap()
@@ -296,7 +296,7 @@ fn the_title_travels_too() {
 fn a_brand_new_branch_updates_nothing() {
     let (_dir, r) = resuelto();
     let spy = Spy::default();
-    let res = resolver(&r, worklist::check_push::ALL_ZEROS, &spy);
+    let res = resolver(&r, worklist_provider::check_push::ALL_ZEROS, &spy);
     assert!(res.is_none(), "sin pedidos y sin diff, no hay nada que hacer");
 }
 

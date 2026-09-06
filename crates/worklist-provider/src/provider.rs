@@ -82,7 +82,7 @@ pub fn key_of_filename(name: &str) -> Option<String> {
         .or_else(|| name.strip_suffix(".user-story.md"))
         .or_else(|| name.strip_suffix(".epic.md"))
         .or_else(|| name.strip_suffix(".sprint.md"))?;
-    (!crate::is_unassigned(stem)).then(|| stem.to_string())
+    (!worklist_core::is_unassigned(stem)).then(|| stem.to_string())
 }
 
 pub fn status_of(text: &str) -> Option<String> {

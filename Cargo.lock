@@ -426,7 +426,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "worklist"
+name = "worklist-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "worklist-core",
+]
+
+[[package]]
+name = "worklist-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -438,12 +447,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "worklist-cli"
+name = "worklist-provider"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "atlassian-markdown-converter",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "worklist-core",
+]
+
+[[package]]
+name = "worklist-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "worklist",
+ "worklist-core",
+ "worklist-provider",
 ]
 
 [[package]]

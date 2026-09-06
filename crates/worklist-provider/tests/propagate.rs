@@ -7,7 +7,7 @@ mod common;
 
 use common::{item, run, show, show_tree, sprint, Spy};
 use std::path::Path;
-use worklist::propagate::{propagate, propagated_ref, Step};
+use worklist_provider::propagate::{propagate, propagated_ref, Step};
 
 /// Cualquiera sirve: los tests de acá no traducen links a ningún host.
 const BASE: &str = "https://ejemplo.atlassian.net";
@@ -69,7 +69,7 @@ fn arbol_con_cita() -> tempfile::TempDir {
 fn el_trabajo_de_la_ventana_sube_y_el_panorama_no_pierde_lo_recortado() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     // Alguien edita adentro de su ventana y empuja.
     let wt = dir.path().join("w");
@@ -92,14 +92,14 @@ fn el_trabajo_de_la_ventana_sube_y_el_panorama_no_pierde_lo_recortado() {
 fn el_renombre_se_rehace_y_corrige_las_referencias_de_afuera_del_recorte() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
     let spy = Spy::default();
-    worklist::assign::assign_window(
+    worklist_provider::assign::assign_window(
         r,
         "refs/heads/secure/sprint/1",
-        worklist::check_push::ALL_ZEROS,
+        worklist_provider::check_push::ALL_ZEROS,
         &tip,
         "https://x",
         &spy,
@@ -145,7 +145,7 @@ fn el_renombre_se_rehace_y_corrige_las_referencias_de_afuera_del_recorte() {
 fn propagar_dos_veces_no_hace_nada_la_segunda() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
@@ -165,7 +165,7 @@ fn propagar_dos_veces_no_hace_nada_la_segunda() {
 fn un_choque_no_mueve_el_panorama_ni_la_marca() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     // La ventana escribe una cosa…
     let wt = dir.path().join("w");
@@ -216,7 +216,7 @@ fn sin_el_corte_no_se_propaga_nada() {
 fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
@@ -229,8 +229,8 @@ fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
 
     let panorama = rev(r, "insecure/all");
     let tip = rev(r, "refs/heads/secure/sprint/1");
-    let worklist::propagate::Verdict::Conflict { files, .. } =
-        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap()
+    let worklist_provider::propagate::Verdict::Conflict { files, .. } =
+        worklist_provider::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap()
     else {
         panic!("el prechequeo tiene que verlo")
     };
@@ -244,7 +244,7 @@ fn el_prechequeo_ve_el_choque_sin_escribir_nada() {
 fn el_prechequeo_deja_pasar_lo_que_entra() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
@@ -258,8 +258,8 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
     assert!(matches!(
-        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
-        worklist::propagate::Verdict::Applies
+        worklist_provider::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
+        worklist_provider::propagate::Verdict::Applies
     ));
     // Y de hecho entra.
     propagate(r, "refs/heads/secure/sprint/1", &tip, BASE, false).unwrap().unwrap();
@@ -274,7 +274,7 @@ fn el_prechequeo_deja_pasar_lo_que_entra() {
 fn sin_panorama_el_prechequeo_lo_dice_en_vez_de_dejar_pasar() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
     let tip = rev(r, "refs/heads/secure/sprint/1");
 
     // El servidor que solo recibio ventanas: el panorama nunca llego.
@@ -282,8 +282,8 @@ fn sin_panorama_el_prechequeo_lo_dice_en_vez_de_dejar_pasar() {
     run(r, &["branch", "-q", "-D", "insecure/all"]);
 
     assert!(matches!(
-        worklist::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
-        worklist::propagate::Verdict::NoPanorama
+        worklist_provider::propagate::would_conflict(r, "refs/heads/secure/sprint/1", &tip).unwrap(),
+        worklist_provider::propagate::Verdict::NoPanorama
     ));
 }
 
@@ -293,7 +293,7 @@ fn sin_panorama_el_prechequeo_lo_dice_en_vez_de_dejar_pasar() {
 fn desde_afuera_del_panorama_usa_un_worktree_temporal() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
@@ -318,7 +318,7 @@ fn desde_afuera_del_panorama_usa_un_worktree_temporal() {
 fn no_mueve_el_panorama_que_otro_worktree_tiene_abierto() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let wt = dir.path().join("w");
     run(r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/1"]);
@@ -377,12 +377,12 @@ fn el_normalize_de_dos_ventanas_sobre_el_mismo_ancestro_no_choca() {
     // del repo real: cada una ve el panorama sin claves, y resuelve la suya.
     let spy = Spy::default();
     for (sprint_id, rama) in ["1", "2"].iter().zip(ramas) {
-        worklist::window::open(r, sprint_id, "insecure/all", false, false).unwrap();
+        worklist_core::window::open(r, sprint_id, "insecure/all", false, false).unwrap();
         let tip = rev(r, rama);
-        worklist::assign::assign_window(
+        worklist_provider::assign::assign_window(
             r,
             rama,
-            worklist::check_push::ALL_ZEROS,
+            worklist_provider::check_push::ALL_ZEROS,
             &tip,
             "https://x",
             &spy,
@@ -420,14 +420,14 @@ fn el_normalize_de_dos_ventanas_sobre_el_mismo_ancestro_no_choca() {
 fn la_clave_del_sprint_se_reescribe_sobre_el_sprint_md_del_panorama() {
     let dir = arbol_con_cita();
     let r = &dir.path().join("repo");
-    worklist::window::open(r, "1", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(r, "1", "insecure/all", false, false).unwrap();
 
     let tip = rev(r, "refs/heads/secure/sprint/1");
     let spy = Spy::default();
-    worklist::assign::assign_window(
+    worklist_provider::assign::assign_window(
         r,
         "refs/heads/secure/sprint/1",
-        worklist::check_push::ALL_ZEROS,
+        worklist_provider::check_push::ALL_ZEROS,
         &tip,
         "https://x",
         &spy,

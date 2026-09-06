@@ -1,9 +1,13 @@
 [workspace]
 members = [
-    "crates/worklist",
+    "crates/worklist-core",
+    "crates/worklist-provider",
     "crates/worklist-cli",
+    "crates/worklist-server",
 ]
 resolver = "2"
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
+version = "0.1.0"
+edition = "2021"

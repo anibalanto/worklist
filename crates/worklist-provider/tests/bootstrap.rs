@@ -7,11 +7,11 @@
 mod common;
 
 use common::{arbol, Spy};
-use worklist::assign::bootstrap;
+use worklist_provider::assign::bootstrap;
 
 const REF: &str = "refs/heads/insecure/all";
 
-fn correr(dir: &std::path::Path, spy: &Spy) -> Option<worklist::assign::BootstrapResult> {
+fn correr(dir: &std::path::Path, spy: &Spy) -> Option<worklist_provider::assign::BootstrapResult> {
     bootstrap(dir, REF, "https://x", spy, "701", None, false).unwrap()
 }
 
@@ -175,20 +175,20 @@ struct SeCaeEn {
     hasta: usize,
 }
 
-impl worklist::board::Board for SeCaeEn {
+impl worklist_provider::board::Board for SeCaeEn {
     fn create_or_find(
         &self,
         title: &str,
         _t: &str,
         _d: &str,
         _p: Option<&str>,
-    ) -> anyhow::Result<worklist::board::Assignment> {
+    ) -> anyhow::Result<worklist_provider::board::Assignment> {
         let i = self.n.get();
         if i >= self.hasta {
             anyhow::bail!("buscar por titulo fallo por acli: {title}");
         }
         self.n.set(i + 1);
-        Ok(worklist::board::Assignment::Created(format!("ACC-{}", 100 + i)))
+        Ok(worklist_provider::board::Assignment::Created(format!("ACC-{}", 100 + i)))
     }
     fn find(&self, _t: &str) -> anyhow::Result<Option<String>> {
         Ok(None)

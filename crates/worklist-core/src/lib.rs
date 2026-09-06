@@ -3,17 +3,13 @@
 //! compare-and-swap que decide si un push a una ventana se acepta.
 //!
 //! `resolve_batch` no habla con ningun proveedor: quien asigna la clave nueva
-//! es quien la llama, pasandole el mapa ya resuelto. `check_push` si habla
-//! con uno, via el puerto: `port` declara las operaciones y a que transporte
-//! le toca cada una, `board` y `provider` las implementan contra Jira.
+//! es quien la llama, pasandole el mapa ya resuelto. **Nada de este crate
+//! enlaza el puerto** — eso es `worklist-provider`, y es lo que hace que el
+//! binario del cliente no tenga con que escribir en el proveedor. Ver
+//! `concepts/distribution.md`.
 
-pub mod assign;
-pub mod board;
 pub mod body;
-pub mod check_push;
-pub mod port;
-pub mod propagate;
-pub mod provider;
+pub mod git;
 pub mod window;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -268,7 +264,7 @@ pub fn topo_order(repo: &Path, slugs: &[String]) -> Result<Vec<String>> {
 /// que `GIT_QUARANTINE_PATH` y `GIT_OBJECT_DIRECTORY` señalan. Quitarlas deja a
 /// git sin poder leer lo que el push trae — `bad object <sha>`— y eso no se
 /// notaba mientras el compare-and-swap sólo miraba el tip anterior.
-pub(crate) fn git_command(repo: &Path) -> Command {
+pub fn git_command(repo: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(repo);
     for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
@@ -283,7 +279,7 @@ pub(crate) fn git_command(repo: &Path) -> Command {
 /// no, y la mueve dejando el indice del worktree apuntando al arbol anterior.
 /// El resultado es un `git status` con archivos "modificados" que nadie toco, y
 /// un `git merge` que se niega a seguir por cambios locales que no existen.
-pub(crate) fn checked_out_at(repo: &Path, branch: &str) -> Option<String> {
+pub fn checked_out_at(repo: &Path, branch: &str) -> Option<String> {
     let listing = git_command(repo)
         .args(["worktree", "list", "--porcelain"])
         .output()

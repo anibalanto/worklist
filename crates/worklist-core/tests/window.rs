@@ -117,7 +117,7 @@ fn head_de(r: &Path, refname: &str) -> String {
 #[test]
 fn lleva_el_sprint_el_item_declarado_y_su_subarbol() {
     let dir = repo_con_arbol();
-    let files = worklist::window::window_files(dir.path(), "HEAD", "10").unwrap();
+    let files = worklist_core::window::window_files(dir.path(), "HEAD", "10").unwrap();
 
     assert!(files.contains(&"_sprints/10.sprint.md".to_string()));
     assert!(files.contains(&"ACC-2.user-story.md".to_string()), "el item declarado");
@@ -127,7 +127,7 @@ fn lleva_el_sprint_el_item_declarado_y_su_subarbol() {
 #[test]
 fn lleva_la_epica_como_ancestro_para_que_parent_cierre() {
     let dir = repo_con_arbol();
-    let files = worklist::window::window_files(dir.path(), "HEAD", "10").unwrap();
+    let files = worklist_core::window::window_files(dir.path(), "HEAD", "10").unwrap();
     assert!(
         files.contains(&"ACC-1.epic.md".to_string()),
         "sin la epica, el `parent` de ACC-2 no resuelve adentro de la ventana"
@@ -137,7 +137,7 @@ fn lleva_la_epica_como_ancestro_para_que_parent_cierre() {
 #[test]
 fn no_lleva_lo_que_no_es_de_la_ventana() {
     let dir = repo_con_arbol();
-    let files = worklist::window::window_files(dir.path(), "HEAD", "10").unwrap();
+    let files = worklist_core::window::window_files(dir.path(), "HEAD", "10").unwrap();
 
     // Otra US de la misma epica, y su task: no las declara el sprint.
     assert!(!files.contains(&"ACC-8.user-story.md".to_string()));
@@ -159,7 +159,7 @@ fn un_sprint_que_nombra_algo_que_no_esta_falla() {
     run(r, &["add", "-A"]);
     run(r, &["commit", "-q", "-m", "sprint roto"]);
 
-    let err = worklist::window::window_files(r, "HEAD", "11").unwrap_err();
+    let err = worklist_core::window::window_files(r, "HEAD", "11").unwrap_err();
     assert!(err.to_string().contains("ACC-404"), "el error tiene que decir cuál falta");
 }
 
@@ -169,7 +169,7 @@ fn open_deja_en_la_rama_solo_esos_archivos() {
     let r = dir.path();
     run(r, &["branch", "-q", "insecure/all"]);
 
-    let (files, _head) = worklist::window::open(r, "10", "insecure/all", false, false).unwrap();
+    let (files, _head) = worklist_core::window::open(r, "10", "insecure/all", false, false).unwrap();
 
     let out = Command::new("git")
         .arg("-C").arg(r)
@@ -190,10 +190,10 @@ fn open_deja_en_la_rama_solo_esos_archivos() {
 #[test]
 fn recortar_de_nuevo_replanta_lo_que_estaba_encima() {
     let (_dir, r) = arbol_aislado();
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
     let head_servidor = el_servidor_escribe_encima(&r, "10", "normalize: ACC-1");
 
-    let (_, head) = worklist::window::open(&r, "10", "insecure/all", false, false)
+    let (_, head) = worklist_core::window::open(&r, "10", "insecure/all", false, false)
         .expect("regenerar no descarta: replanta");
 
     let _ = head_servidor;
@@ -226,7 +226,7 @@ fn recortar_de_nuevo_replanta_lo_que_estaba_encima() {
 #[test]
 fn regenerar_no_ensancha_la_ventana_con_lo_que_el_panorama_gano() {
     let (_dir, r) = arbol_aislado();
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
     el_servidor_escribe_encima(&r, "10", "trabajo adentro");
 
     // El panorama gana un item que no es de esta ventana.
@@ -237,7 +237,7 @@ fn regenerar_no_ensancha_la_ventana_con_lo_que_el_panorama_gano() {
     run(&wt, &["commit", "-qm", "un item ajeno"]);
     run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
 
     let en_la_rama = String::from_utf8(
         Command::new("git")
@@ -253,69 +253,16 @@ fn regenerar_no_ensancha_la_ventana_con_lo_que_el_panorama_gano() {
     assert!(en_la_rama.contains("ACC-2.user-story.md"), "y lo suyo sigue: {en_la_rama}");
 }
 
-/// Y el descarte deja de ser una promesa: si el trabajo ya subio al panorama,
-/// el replante queda vacio **solo**, por patch-id. Nadie tiene que acordarse
-/// de propagar antes de regenerar.
-#[test]
-fn el_replante_queda_vacio_si_el_trabajo_ya_subio() {
-    let (_dir, r) = arbol_aislado();
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
-
-    let wt = r.join("w");
-    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
-    item(&wt, "ACC-3.task.md", Some("ACC-2"));
-    std::fs::write(wt.join("ACC-3.task.md"), "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: ACC-2\n---\n\neditado\n").unwrap();
-    run(&wt, &["commit", "-aqm", "edito ACC-3"]);
-    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
-
-    let tip = head_de(&r, "refs/heads/secure/sprint/10");
-    worklist::propagate::propagate(&r, "refs/heads/secure/sprint/10", &tip, "https://ejemplo.atlassian.net", false)
-        .unwrap()
-        .unwrap();
-
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
-
-    let log = String::from_utf8(
-        Command::new("git")
-            .arg("-C")
-            .arg(&r)
-            .args(["log", "--format=%s", "refs/heads/secure/sprint/10"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    // El commit sigue nombrado en el log, y **por el panorama**: la
-    // propagacion lo cherry-pickeo alla, y el corte nuevo sale de ahi. Lo que
-    // no queda es una copia **encima** del corte.
-    assert_eq!(
-        log.lines().next(),
-        Some("window: sprint/10 recortado desde insecure/all"),
-        "el replante quedo vacio solo: {log}"
-    );
-    let contenido = String::from_utf8(
-        Command::new("git")
-            .arg("-C")
-            .arg(&r)
-            .args(["show", "refs/heads/secure/sprint/10:ACC-3.task.md"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    assert!(contenido.contains("editado"), "y sin embargo el trabajo esta: {contenido}");
-}
-
 /// `--force` baja de categoria: ya no es el flujo del `items` que cambio —eso
 /// es regenerar y ya— sino tirar lo local a sabiendas cuando el replante no
 /// entra.
 #[test]
 fn force_tira_lo_de_la_ventana_a_sabiendas() {
     let (_dir, r) = arbol_aislado();
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
     let head_servidor = el_servidor_escribe_encima(&r, "10", "encima");
 
-    let (_, head) = worklist::window::open(&r, "10", "insecure/all", false, true).unwrap();
+    let (_, head) = worklist_core::window::open(&r, "10", "insecure/all", false, true).unwrap();
     assert_ne!(head, head_servidor, "con --force el corte reemplaza");
     assert_eq!(head_de(&r, "refs/heads/secure/sprint/10"), head);
 }
@@ -324,7 +271,7 @@ fn force_tira_lo_de_la_ventana_a_sabiendas() {
 #[test]
 fn opening_a_fresh_window_is_not_blocked() {
     let (_dir, r) = arbol_aislado();
-    let (files, head) = worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    let (files, head) = worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
     assert!(!files.is_empty());
     assert!(!head.is_empty());
 }
@@ -333,8 +280,8 @@ fn opening_a_fresh_window_is_not_blocked() {
 #[test]
 fn recutting_an_untouched_window_is_not_blocked() {
     let (_dir, r) = arbol_aislado();
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
-    worklist::window::open(&r, "10", "insecure/all", false, false)
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false)
         .expect("nada que descartar, nada que impedir");
 }
 
@@ -346,13 +293,13 @@ fn recutting_an_untouched_window_is_not_blocked() {
 #[test]
 fn opening_a_window_checked_out_somewhere_refuses() {
     let (_dir, r) = arbol_aislado();
-    worklist::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
 
     let wt = r.join("checkout");
     run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
 
     for force in [false, true] {
-        let err = worklist::window::open(&r, "10", "insecure/all", false, force)
+        let err = worklist_core::window::open(&r, "10", "insecure/all", false, force)
             .unwrap_err()
             .to_string();
         assert!(err.contains("worktree"), "tiene que nombrar el problema: {err}");

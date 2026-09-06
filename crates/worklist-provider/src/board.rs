@@ -653,7 +653,7 @@ fn keys_in(v: &serde_json::Value) -> Vec<String> {
                 for (k, val) in m {
                     if k == "key" {
                         if let Some(s) = val.as_str() {
-                            if !crate::is_unassigned(s) && !out.contains(&s.to_string()) {
+                            if !worklist_core::is_unassigned(s) && !out.contains(&s.to_string()) {
                                 out.push(s.to_string());
                             }
                         }

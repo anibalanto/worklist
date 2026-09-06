@@ -2,7 +2,7 @@
 //! round-trip converge. Si no convergiera, cada ciclo produciria un diff que
 //! nadie escribio y el compare-and-swap empezaria a rechazar de mentira.
 
-use worklist::body::{links_in, links_out, round_trip, split_frontmatter};
+use worklist_core::body::{links_in, links_out, round_trip, split_frontmatter};
 
 const BASE: &str = "https://ejemplo.atlassian.net";
 
@@ -78,7 +78,7 @@ fn una_url_a_algo_de_otra_ventana_se_queda_como_url() {
 /// del conversor tiene los dos marks y Jira rechaza el documento entero.
 #[test]
 fn code_and_strong_together_lose_the_strong() {
-    let adf = worklist::body::body_to_adf("Cargar **`bilinker`** primero.").unwrap();
+    let adf = worklist_core::body::body_to_adf("Cargar **`bilinker`** primero.").unwrap();
     let v: serde_json::Value = serde_json::from_str(&adf).unwrap();
     let mut seen = false;
     fn walk(n: &serde_json::Value, seen: &mut bool) {
@@ -105,14 +105,14 @@ fn code_and_strong_together_lose_the_strong() {
 /// enfasis.
 #[test]
 fn strong_on_its_own_survives() {
-    let adf = worklist::body::body_to_adf("Esto es **importante**.").unwrap();
+    let adf = worklist_core::body::body_to_adf("Esto es **importante**.").unwrap();
     assert!(adf.contains("strong"), "{adf}");
 }
 
 /// Y el codigo solo tampoco.
 #[test]
 fn code_on_its_own_survives() {
-    let adf = worklist::body::body_to_adf("Corre `bilinker check`.").unwrap();
+    let adf = worklist_core::body::body_to_adf("Corre `bilinker check`.").unwrap();
     assert!(adf.contains("code"), "{adf}");
 }
 
@@ -120,7 +120,7 @@ fn code_on_its_own_survives() {
 /// estaba dentro de un item de lista.
 #[test]
 fn the_pruning_reaches_inside_a_list() {
-    let adf = worklist::body::body_to_adf("- **`bilinker`** — el prerequisito\n- otra cosa").unwrap();
+    let adf = worklist_core::body::body_to_adf("- **`bilinker`** — el prerequisito\n- otra cosa").unwrap();
     let v: serde_json::Value = serde_json::from_str(&adf).unwrap();
     let s = serde_json::to_string(&v).unwrap();
     assert!(s.contains("bulletList"), "el caso no se ejercito: {s}");

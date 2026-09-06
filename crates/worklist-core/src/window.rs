@@ -142,7 +142,7 @@ fn work_above_cut(repo: &Path, branch: &str, from: &str) -> Result<Option<(Strin
     if git_output(repo, &["rev-parse", "--verify", "--quiet", branch]).is_err() {
         return Ok(None);
     }
-    let cut = crate::propagate::cut_commit(repo, branch, from)?;
+    let cut = crate::git::cut_commit(repo, branch, from)?;
     let work = git_output(repo, &["log", "--oneline", &format!("{cut}..{branch}")])?;
     Ok(Some((cut, work.lines().map(|l| l.to_string()).collect())))
 }
@@ -210,9 +210,9 @@ pub fn open(
         // pregunta contra el arbol que tiene delante, que es lo que importa.
         let shas = git_output(repo, &["rev-list", "--reverse", &format!("{cut}..{branch}")])?;
         for sha in shas.lines() {
-            match crate::propagate::cherry_pick_one(&tmp, sha)? {
-                crate::propagate::Picked::Applied | crate::propagate::Picked::Empty => {}
-                crate::propagate::Picked::Conflict { files, output } => bail!(
+            match crate::git::cherry_pick_one(&tmp, sha)? {
+                crate::git::Picked::Applied | crate::git::Picked::Empty => {}
+                crate::git::Picked::Conflict { files, output } => bail!(
                     "el corte nuevo esta, pero un commit de la ventana no se pudo replantar:\n\
                      \x20 {linea}\n\
                      \x20 choca en: {files}\n\
