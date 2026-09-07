@@ -4,13 +4,14 @@ endpoint:
     link: path <
     accepted:
     - agree:
-      - test
+      - Anibal
       link: capture 13dc10c6939119e4ea5ff3eb18bbf933
-      hash: 4af625fc827eb33dd7f0bfbccc371dafd3d68f79e447242faa29652388b87105
+      hash: 4cf9db46440f35ea0d8772d366f32632499679d17a6d68391e72a6fb47c5decb
   1:
     link: capture 3bd5efb0eb283195a45e60c41cfcfadc
     accepted:
     - agree:
+      - Anibal
       - test
       link: capture 3bd5efb0eb283195a45e60c41cfcfadc
       hash: 599dcc027f8b30358ea6ae96253fb789460cb032a9d05faa1059e99607719c56
