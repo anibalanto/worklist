@@ -234,14 +234,14 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     let (contiene, _) =
         try_git(&v.path, &["merge-base", "--is-ancestor", &tip, &antes])?;
     if contiene {
-        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: None });
+        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: Some(proveedor) });
     }
     // Nada sin empujar: el corte nuevo trae todo mi trabajo, y replantarlo
     // seria pedirle a git que redescubra por patch-id algo que ya se sabe. Y
     // no lo puede contestar: arriba el cuerpo quedo en su forma canonica.
     if todo_subido {
         git_output(&v.path, &["reset", "--hard", "--quiet", &tip])?;
-        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: None });
+        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: Some(proveedor) });
     }
 
     // El replante lo hace `core`, que es donde se puede probar contra un
