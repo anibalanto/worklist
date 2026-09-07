@@ -1684,17 +1684,24 @@ fn cmd_membership(
 
     use worklist_provider::absorb::Membresia;
     let mut sacados = 0;
+    let mut entrados = 0;
     for paso in &pasos {
         match paso {
             Membresia::Sacado { sprint, key } => {
                 sacados += 1;
                 println!("  {key}  sale del sprint {sprint}: el board no lo tiene");
             }
-            // No se agrega: entrar a un sprint es planificar, y eso es de este
-            // lado. Lo que el proveedor arbitra es la baja.
-            Membresia::SoloAlla { sprint, key } => {
-                println!("  {key}  esta en el sprint {sprint} del board y no en el `items` — no se agrega")
+            Membresia::Entra { sprint, key } => {
+                {
+                    entrados += 1;
+                    println!("  {key}  entra al sprint {sprint}: el board lo tiene adentro")
+                }
             }
+            // No se agrega, y no es una eleccion: el `items` nombraria algo que
+            // no esta y el proximo recorte falla.
+            Membresia::SinArchivo { sprint, key } => println!(
+                "  ! {key} esta en el sprint {sprint} del board y no es un item de este lado — no entra"
+            ),
             Membresia::NoSePudoLeer { sprint, porque } => {
                 println!("  ! el sprint {sprint} no se pudo leer: {porque}")
             }
@@ -1705,7 +1712,7 @@ fn cmd_membership(
             ),
         }
     }
-    println!("resumen: {sacados} baja(s)");
+    println!("resumen: {sacados} baja(s), {entrados} alta(s)");
     if let Some(sha) = commit {
         println!("membresia: {refname} ({})", &sha[..7.min(sha.len())]);
     }

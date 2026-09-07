@@ -279,10 +279,19 @@ fn ahora() -> String {
 pub enum Membresia {
     /// El board saco un item del sprint, y la composicion lo saca tambien.
     Sacado { sprint: String, key: String },
-    /// El board tiene uno que la composicion no. **No se agrega**: entrar a un
-    /// sprint es planificar, y eso se hace de este lado — lo que el proveedor
-    /// arbitra es la baja de lo que el ya no tiene. Se reporta.
-    SoloAlla { sprint: String, key: String },
+    /// El board tiene uno que la composicion no, y **entra**.
+    ///
+    /// Antes esto se reportaba y no se aplicaba, con el argumento de que entrar
+    /// a un sprint es planificar y eso se hace de este lado. **Era acotar la
+    /// regla**: si el proveedor manda, mover un item *hacia* un sprint es el
+    /// proveedor moviendo algo igual que sacarlo.
+    Entra { sprint: String, key: String },
+    /// El board lo tiene en el sprint y **el panorama no tiene su archivo**.
+    ///
+    /// No se agrega, y no es una eleccion: el `items` nombraria algo que no
+    /// esta, y el proximo recorte falla. Es el caso de un issue creado en Jira
+    /// que nunca fue un item de este lado.
+    SinArchivo { sprint: String, key: String },
     /// El proveedor no pudo contestar que tiene el sprint. **No es que
     /// coincida**: sin eso no hay con que comparar, y vaciar el `items` porque
     /// una lectura fallo seria catastrofico.
@@ -315,6 +324,7 @@ pub fn membresia(
     let producto = worklist_core::product::leer(repo, refname)?;
     let mut pasos = Vec::new();
     let mut sacar: Vec<(String, String)> = Vec::new();
+    let mut entrar: Vec<(String, String)> = Vec::new();
 
     for s in &producto.sprints {
         // Un sprint sin clave no existe del otro lado: no hay con que comparar,
@@ -348,19 +358,32 @@ pub fn membresia(
             }
         }
         for item in &alla {
-            if !s.items.contains(item) {
-                pasos.push(Membresia::SoloAlla { sprint: s.id.clone(), key: item.clone() });
+            if s.items.contains(item) {
+                continue;
             }
+            // Sin archivo no se puede agregar: el `items` nombraria algo que no
+            // esta y el recorte falla. Es un issue que nacio en Jira.
+            if archivo_de(repo, refname, item).is_err() {
+                pasos.push(Membresia::SinArchivo { sprint: s.id.clone(), key: item.clone() });
+                continue;
+            }
+            pasos.push(Membresia::Entra { sprint: s.id.clone(), key: item.clone() });
+            entrar.push((s.id.clone(), item.clone()));
         }
     }
 
-    if sacar.is_empty() || dry_run {
+    if (sacar.is_empty() && entrar.is_empty()) || dry_run {
         return Ok((pasos, None));
     }
-    Ok((pasos, Some(escribir_membresia(repo, refname, &sacar)?)))
+    Ok((pasos, Some(escribir_membresia(repo, refname, &sacar, &entrar)?)))
 }
 
-fn escribir_membresia(repo: &Path, refname: &str, sacar: &[(String, String)]) -> Result<String> {
+fn escribir_membresia(
+    repo: &Path,
+    refname: &str,
+    sacar: &[(String, String)],
+    entrar: &[(String, String)],
+) -> Result<String> {
     let tmp = repo.join("../.worklist-membresia");
     let _ = std::fs::remove_dir_all(&tmp);
     git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), refname])?;
@@ -373,10 +396,26 @@ fn escribir_membresia(repo: &Path, refname: &str, sacar: &[(String, String)]) ->
                 s.items.retain(|i| i != key);
             }
         }
+        for (sprint, key) in entrar {
+            // **Entrar a un sprint es salir del anterior**, que es como el
+            // proveedor lo modela: un issue esta en un sprint a la vez.
+            for s in p.sprints.iter_mut() {
+                if &s.id != sprint {
+                    s.items.retain(|i| i != key);
+                }
+            }
+            if let Some(s) = p.sprints.iter_mut().find(|s| &s.id == sprint) {
+                if !s.items.iter().any(|i| i == key) {
+                    s.items.push(key.clone());
+                }
+            }
+            p.backlog.retain(|i| i != key);
+        }
         std::fs::write(&path, p.to_yaml()?)?;
-        let que: Vec<String> =
-            sacar.iter().map(|(s, k)| format!("{k} del sprint {s}")).collect();
-        worklist_core::commit_all(&tmp, &format!("membresia: sale {}", que.join(", ")))?;
+        let mut que: Vec<String> =
+            sacar.iter().map(|(s, k)| format!("sale {k} del sprint {s}")).collect();
+        que.extend(entrar.iter().map(|(s, k)| format!("entra {k} al sprint {s}")));
+        worklist_core::commit_all(&tmp, &format!("membresia: {}", que.join(", ")))?;
         Ok(git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
     })();
 

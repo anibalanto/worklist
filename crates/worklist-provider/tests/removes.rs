@@ -236,24 +236,46 @@ fn una_baja_en_el_board_sale_del_items() {
     assert_eq!(items_del_21(&r), vec!["ACC-1".to_string(), "ACC-3".to_string()]);
 }
 
-/// Y lo que está en el board y no en el `items` **no se agrega**: entrar a un
-/// sprint es planificar, y eso se hace de este lado. Se reporta.
+/// **Y un alta también la manda el proveedor.**
+///
+/// Esto primero se reportaba y no se aplicaba, con el argumento de que entrar a
+/// un sprint es planificar. Era acotar la regla: si el proveedor manda, mover
+/// un ítem *hacia* un sprint es el proveedor moviendo algo igual que sacarlo.
 #[test]
-fn lo_que_esta_solo_en_el_board_se_reporta_y_no_se_agrega() {
+fn un_alta_en_el_board_entra_al_items() {
     let (_d, r) = con_composicion(&["ACC-1"]);
-    let (pasos, commit) = worklist_provider::absorb::membresia(
+    let (_pasos, commit) = worklist_provider::absorb::membresia(
         &r,
         "refs/heads/secure/sprint/1",
-        &board_con("6525", &["ACC-1", "ACC-9"]),
+        &board_con("6525", &["ACC-1", "ACC-2"]),
         "701",
         false,
     )
     .unwrap();
 
-    assert!(commit.is_none(), "escribio por una alta");
+    assert!(commit.is_some(), "no aplico el alta");
+    assert_eq!(items_del_21(&r), vec!["ACC-1".to_string(), "ACC-2".to_string()]);
+}
+
+/// Pero un issue que el board tiene y **no es un ítem de este lado** no entra,
+/// y no es una elección: el `items` nombraría algo que no está, y el próximo
+/// recorte falla.
+#[test]
+fn un_issue_sin_archivo_no_entra_al_items() {
+    let (_d, r) = con_composicion(&["ACC-1"]);
+    let (pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1", "ACC-999"]),
+        "701",
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_none(), "agrego algo que no tiene archivo");
     assert_eq!(items_del_21(&r), vec!["ACC-1".to_string()]);
     assert!(
-        pasos.iter().any(|p| matches!(p, worklist_provider::absorb::Membresia::SoloAlla { .. })),
+        pasos.iter().any(|p| matches!(p, worklist_provider::absorb::Membresia::SinArchivo { .. })),
         "no lo reporto: {pasos:?}"
     );
 }
