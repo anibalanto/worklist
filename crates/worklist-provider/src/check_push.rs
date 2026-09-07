@@ -19,13 +19,35 @@ pub struct RejectedKey {
     /// Que campo difiere: `status`, `titulo`, `cuerpo` — o `transicion`, que no
     /// es un campo que difiere sino una regla del workflow que no se cumple.
     pub field: &'static str,
-    pub tip_status: String,
-    pub live_status: String,
+    /// Los dos lados de la diferencia. No se llaman `status` porque el campo no
+    /// siempre lo es: con `cuerpo` llevan **la linea** que difiere, no el
+    /// cuerpo entero.
+    pub tip: String,
+    pub live: String,
+    /// En que linea del cuerpo aparece la primera diferencia, 1-based. Solo en
+    /// un `cuerpo`, y es lo que vuelve accionable el rechazo: decir que difiere
+    /// sin decir donde deja al que empuja comparando los dos cuerpos a ojo.
+    pub line: Option<usize>,
     /// Las transiciones que el workflow si admite. Solo en un rechazo por
     /// regla, y **`None` es "no se pudieron listar"**: un rechazo que no dice
     /// cuales si se puede no informo nada, pero inventar una lista vacia seria
     /// afirmar sobre el board sin mirarlo.
     pub disponibles: Option<Vec<String>>,
+}
+
+/// Lo que una corrida sin push encontro sobre una rama entera.
+///
+/// Lleva **cuantas claves se compararon y cuales no se pudieron**, porque un
+/// listado de diferencias sin esos dos numeros no dice sobre que universo
+/// habla: cero diferencias sobre cero claves se lee igual que cero sobre
+/// doscientas. Ver `commands/check-push.md`.
+pub struct RefReport {
+    /// Las claves del tip que el proveedor si informo.
+    pub compared: usize,
+    /// Las que no. No son coincidentes: son las que no se vieron. Ver
+    /// `commands/push-states.md`.
+    pub uninformed: Vec<String>,
+    pub differences: Vec<RejectedKey>,
 }
 
 pub const ALL_ZEROS: &str = "0000000000000000000000000000000000000000";
@@ -105,84 +127,12 @@ pub fn check_one(
     let live = provider.snapshot(&keys)?;
 
     // El `status`, sobre todas: la rama promete verificarse entera.
-    //
-    // Y se compara **traducido**: el del tip esta en el vocabulario del
-    // proyecto y el del proveedor en el suyo, asi que compararlos crudos
-    // rechaza TODAS las ventanas — que es lo que tenia a la instalacion
-    // apuntando al proveedor de prueba. El de prueba recibe el mapeo identidad,
-    // asi que aca no hay rama sin traducir. Ver `concepts/states.md`.
-    let mut out: Vec<RejectedKey> = beliefs
-        .iter()
-        .filter_map(|(key, tip_status)| {
-            // `None` en el status del proveedor es "no lo informa", que no es
-            // lo mismo que vacio: no hay nada contra que comparar.
-            let live_status = live.get(key)?.status.as_ref()?;
-            // Un status que el vocabulario no declara **se rechaza**, no se
-            // saltea: no poder traducirlo es no poder decir nada sobre ese
-            // item, y callar seria confundirlo con "esta bien".
-            let Some(destino) = estados.destino(tip_status) else {
-                return Some(RejectedKey {
-                    key: key.clone(),
-                    field: "status",
-                    tip_status: format!("{tip_status} (no esta en el vocabulario)"),
-                    live_status: live_status.clone(),
-                    disponibles: None,
-                });
-            };
-            let esperado = destino.status();
-            (live_status != esperado).then(|| RejectedKey {
-                key: key.clone(),
-                field: "status",
-                // La traduccion se muestra **solo cuando dice algo**: con el
-                // mapeo identidad, `open (open)` es ruido que tapa el dato.
-                tip_status: if esperado == tip_status {
-                    tip_status.clone()
-                } else {
-                    format!("{tip_status} ({esperado})")
-                },
-                live_status: live_status.clone(),
-                disponibles: None,
-            })
-        })
-        .collect();
+    let mut out = compare_status(&beliefs, &live, estados);
 
     // El titulo y el cuerpo, solo sobre lo que este push escribe.
     for key in crate::assign::changed_keys(repo, old, new)? {
         let Some(snap) = live.get(&key) else { continue };
-        let Ok(text) = git_output(repo, &["show", &format!("{old}:{}", file_of(repo, old, &key)?)])
-        else {
-            continue;
-        };
-        if let Some(live_title) = &snap.summary {
-            if let Some(tip_title) = crate::assign::title_of(&text) {
-                if *live_title != tip_title {
-                    out.push(RejectedKey {
-                        key: key.clone(),
-                        field: "titulo",
-                        tip_status: tip_title,
-                        live_status: live_title.clone(),
-                        disponibles: None,
-                    });
-                    continue;
-                }
-            }
-        }
-        if let Some(live_adf) = &snap.description {
-            // Se compara **markdown contra markdown**: lo guardado es la vuelta
-            // del round-trip, asi que el archivo del tip es lo que el proveedor
-            // deberia tener. Convertir de un solo lado alcanza.
-            let Ok(live_body) = worklist_core::body::adf_to_body(live_adf) else { continue };
-            let (_, tip_body) = worklist_core::body::split_frontmatter(&text);
-            if live_body.trim() != tip_body.trim() {
-                out.push(RejectedKey {
-                    key: key.clone(),
-                    field: "cuerpo",
-                    tip_status: "el del tip".into(),
-                    live_status: "otro en el proveedor".into(),
-                    disponibles: None,
-                });
-            }
-        }
+        out.extend(compare_content(repo, old, &key, snap));
     }
 
     // ── La transicion propuesta.
@@ -203,13 +153,181 @@ pub fn check_one(
         out.push(RejectedKey {
             key,
             field: "transicion",
-            tip_status: propuesto,
-            live_status: "el workflow no la admite".into(),
+            tip: propuesto,
+            live: "el workflow no la admite".into(),
+            line: None,
             disponibles: Some(disponibles),
         });
     }
 
     Ok(out)
+}
+
+/// Las diferencias de **una rama entera**, sin push de por medio: el `status`,
+/// el titulo y el cuerpo sobre todas las claves del tip.
+///
+/// Es lo mismo que compara `check_one` —las dos funciones de abajo, no una
+/// copia—, con los dos recortes del push sacados: aca no hay ventana que se
+/// pueda rechazar ni escritura que este pisando algo, asi que la rama puede ser
+/// insegura y el titulo y el cuerpo se miran sobre todas. Ver
+/// `commands/check-push.md` seccion "Comparar sin rechazar".
+pub fn check_ref(
+    repo: &Path,
+    refname: &str,
+    provider: &dyn Provider,
+    estados: &Estados,
+) -> Result<RefReport> {
+    let beliefs = tip_beliefs(repo, refname)?;
+    let mut keys: Vec<String> = beliefs.keys().cloned().collect();
+    keys.sort();
+    let live = provider.snapshot(&keys)?;
+
+    let uninformed: Vec<String> = keys.iter().filter(|k| !live.contains_key(*k)).cloned().collect();
+    let mut differences = compare_status(&beliefs, &live, estados);
+    for key in &keys {
+        let Some(snap) = live.get(key) else { continue };
+        differences.extend(compare_content(repo, refname, key, snap));
+    }
+    differences.sort_by(|a, b| (&a.key, a.field).cmp(&(&b.key, b.field)));
+
+    Ok(RefReport { compared: keys.len() - uninformed.len(), uninformed, differences })
+}
+
+/// El `status` de cada clave del tip contra el vivo, **traducido**.
+///
+/// El del tip esta en el vocabulario del proyecto y el del proveedor en el
+/// suyo, asi que compararlos crudos rechaza TODAS las ventanas — que es lo que
+/// tenia a la instalacion apuntando al proveedor de prueba. El de prueba recibe
+/// el mapeo identidad, asi que aca no hay rama sin traducir. Ver
+/// `concepts/states.md`.
+fn compare_status(
+    beliefs: &HashMap<String, String>,
+    live: &HashMap<String, crate::provider::Snapshot>,
+    estados: &Estados,
+) -> Vec<RejectedKey> {
+    beliefs
+        .iter()
+        .filter_map(|(key, tip_status)| {
+            // `None` en el status del proveedor es "no lo informa", que no es
+            // lo mismo que vacio: no hay nada contra que comparar.
+            let live_status = live.get(key)?.status.as_ref()?;
+            // Un status que el vocabulario no declara **se rechaza**, no se
+            // saltea: no poder traducirlo es no poder decir nada sobre ese
+            // item, y callar seria confundirlo con "esta bien".
+            let Some(destino) = estados.destino(tip_status) else {
+                return Some(RejectedKey {
+                    key: key.clone(),
+                    field: "status",
+                    tip: format!("{tip_status} (no esta en el vocabulario)"),
+                    live: live_status.clone(),
+                    line: None,
+                    disponibles: None,
+                });
+            };
+            let esperado = destino.status();
+            (live_status != esperado).then(|| RejectedKey {
+                key: key.clone(),
+                field: "status",
+                // La traduccion se muestra **solo cuando dice algo**: con el
+                // mapeo identidad, `open (open)` es ruido que tapa el dato.
+                tip: if esperado == tip_status {
+                    tip_status.clone()
+                } else {
+                    format!("{tip_status} ({esperado})")
+                },
+                live: live_status.clone(),
+                line: None,
+                disponibles: None,
+            })
+        })
+        .collect()
+}
+
+/// El titulo y el cuerpo de una clave, contra lo que `rev` tiene escrito.
+///
+/// Devuelve **a lo sumo una** diferencia: si el titulo ya difiere, el cuerpo no
+/// se mira. Son el mismo item y lo que hay que hacer es abrirlo igual.
+fn compare_content(
+    repo: &Path,
+    rev: &str,
+    key: &str,
+    snap: &crate::provider::Snapshot,
+) -> Option<RejectedKey> {
+    let file = file_of(repo, rev, key).ok()?;
+    let text = git_output(repo, &["show", &format!("{rev}:{file}")]).ok()?;
+
+    if let (Some(live_title), Some(tip_title)) = (&snap.summary, crate::assign::title_of(&text)) {
+        if *live_title != tip_title {
+            return Some(RejectedKey {
+                key: key.to_string(),
+                field: "titulo",
+                tip: tip_title,
+                live: live_title.clone(),
+                line: None,
+                disponibles: None,
+            });
+        }
+    }
+
+    // Se compara **markdown contra markdown**: lo guardado es la vuelta del
+    // round-trip, asi que el archivo del tip es lo que el proveedor deberia
+    // tener. Convertir de un solo lado alcanza.
+    let live_adf = snap.description.as_ref()?;
+    let live_body = worklist_core::body::adf_to_body(live_adf).ok()?;
+    let (_, tip_body) = worklist_core::body::split_frontmatter(&text);
+    if live_body.trim() == tip_body.trim() {
+        return None;
+    }
+    // Un cuerpo son cientos de lineas: ponerlas al lado convierte un rechazo en
+    // un volcado del archivo. Se informa **donde** empieza a diferir.
+    let (line, tip, live) = first_difference(tip_body.trim(), live_body.trim());
+    Some(RejectedKey {
+        key: key.to_string(),
+        field: "cuerpo",
+        tip,
+        live,
+        line: Some(line),
+        disponibles: None,
+    })
+}
+
+/// La primera linea en la que dos cuerpos difieren: su numero 1-based y las dos
+/// versiones, recortadas.
+///
+/// Se llama solo sobre dos cuerpos que ya se sabe que difieren, asi que siempre
+/// hay una linea que devolver: si todas las comunes coinciden, la diferencia es
+/// que uno termina antes, y esa es la linea.
+fn first_difference(tip: &str, live: &str) -> (usize, String, String) {
+    let tip_lines: Vec<&str> = tip.lines().collect();
+    let live_lines: Vec<&str> = live.lines().collect();
+    for i in 0..tip_lines.len().max(live_lines.len()) {
+        let a = tip_lines.get(i);
+        let b = live_lines.get(i);
+        if a == b {
+            continue;
+        }
+        return (i + 1, side(a), side(b));
+    }
+    // Inalcanzable mientras quien llama compare antes, pero devolver algo cierto
+    // es mejor que un panic en un hook.
+    (1, side(tip_lines.first()), side(live_lines.first()))
+}
+
+/// Un lado de la diferencia: la linea recortada, o que ahi ya no hay linea.
+fn side(line: Option<&&str>) -> String {
+    match line {
+        Some(l) => truncate_to(l, 72),
+        None => "(el cuerpo termina antes)".into(),
+    }
+}
+
+/// `s` hasta `max` caracteres — no bytes: un recorte a la mitad de una `ó`
+/// rompe el UTF-8 de la salida del hook.
+fn truncate_to(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max).collect::<String>() + "…"
 }
 
 /// Los `(clave, status del proveedor)` que este push propone mover.

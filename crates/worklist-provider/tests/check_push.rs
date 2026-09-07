@@ -63,8 +63,8 @@ fn el_proveedor_se_movio_y_se_rechaza() {
     let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].key, "ACC-101");
-    assert_eq!(rejected[0].tip_status, "open");
-    assert_eq!(rejected[0].live_status, "done");
+    assert_eq!(rejected[0].tip, "open");
+    assert_eq!(rejected[0].live, "done");
 }
 
 #[test]
@@ -405,7 +405,7 @@ fn una_transicion_ilegal_rechaza_el_push_y_dice_cuales_si() {
     let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
     assert_eq!(r.len(), 1, "{r:?}", r = r.iter().map(|x| x.field).collect::<Vec<_>>());
     assert_eq!(r[0].field, "transicion", "no es una deriva: es una regla");
-    assert_eq!(r[0].tip_status, "Done", "el destino traducido");
+    assert_eq!(r[0].tip, "Done", "el destino traducido");
     assert_eq!(r[0].disponibles.as_deref(), Some(&["Ready for Review".to_string()][..]));
 }
 
@@ -475,5 +475,118 @@ fn un_status_fuera_del_vocabulario_se_rechaza() {
         .unwrap();
     assert!(r.is_empty(), "el tip de old estaba bien");
     assert_eq!(r2.len(), 1);
-    assert!(r2[0].tip_status.contains("no esta en el vocabulario"), "{}", r2[0].tip_status);
+    assert!(r2[0].tip.contains("no esta en el vocabulario"), "{}", r2[0].tip);
+}
+
+// ── ACC-318: comparar sin rechazar.
+//
+// Los dos recortes del push —la rama insegura, y el titulo y el cuerpo solo
+// sobre lo que se escribe— existen por el push. Sin push no hay ninguno de los
+// dos, y lo que se quiere saber es cuanto difiere el inventario entero.
+
+use worklist_provider::check_push::check_ref;
+
+/// Un panorama con dos items, ninguno tocado por nadie.
+fn panorama(cuerpo_101: &str, cuerpo_102: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run(repo, &["init", "-q"]);
+    run(repo, &["config", "user.email", "test@test"]);
+    run(repo, &["config", "user.name", "test"]);
+    let fm = "---\ntitle: X\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\n";
+    std::fs::write(repo.join("ACC-101.task.md"), format!("{fm}{cuerpo_101}\n")).unwrap();
+    std::fs::write(repo.join("ACC-102.task.md"), format!("{fm}{cuerpo_102}\n")).unwrap();
+    run(repo, &["add", "-A"]);
+    run(repo, &["commit", "-q", "-m", "seed"]);
+    run(repo, &["branch", "-f", "insecure/all", "HEAD"]);
+    dir
+}
+
+/// El primer recorte: a una rama insegura no se le empuja, pero leerla no es
+/// empujarle. `check_one` la saltea; `check_ref` la mide.
+#[test]
+fn una_rama_insegura_se_lee_en_vez_de_saltearse() {
+    let dir = panorama("igual", "igual");
+    let p = Rico(HashMap::from([
+        ("ACC-101".to_string(), Snapshot { status: Some("done".into()), ..Default::default() }),
+        ("ACC-102".to_string(), Snapshot { status: Some("open".into()), ..Default::default() }),
+    ]));
+    let salteada =
+        check_one(dir.path(), "HEAD", "HEAD", "refs/heads/insecure/all", &p, &estados()).unwrap();
+    assert!(salteada.is_empty(), "verificando un push, la insegura no se compara");
+
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    assert_eq!(r.compared, 2);
+    assert_eq!(r.differences.len(), 1, "ACC-101 difiere en status");
+    assert_eq!(r.differences[0].key, "ACC-101");
+    assert_eq!(r.differences[0].field, "status");
+}
+
+/// El segundo recorte: sin push, el cuerpo se mira sobre **todas** las claves
+/// del tip. Es la diferencia que `check_one` no encuentra por diseño.
+#[test]
+fn el_cuerpo_se_compara_sobre_todas_las_claves_del_tip() {
+    let dir = panorama("lo que el tip tiene", "y este igual");
+    let p = Rico(HashMap::from([
+        (
+            "ACC-101".to_string(),
+            Snapshot {
+                status: Some("open".into()),
+                description: Some(adf("otra cosa, editada en el board")),
+                ..Default::default()
+            },
+        ),
+        (
+            "ACC-102".to_string(),
+            Snapshot {
+                status: Some("open".into()),
+                description: Some(adf("y este igual")),
+                ..Default::default()
+            },
+        ),
+    ]));
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    assert_eq!(r.differences.len(), 1, "{:?}", r.differences.iter().map(|d| &d.key).collect::<Vec<_>>());
+    assert_eq!(r.differences[0].key, "ACC-101");
+    assert_eq!(r.differences[0].field, "cuerpo");
+}
+
+/// Un cuerpo que difiere dice **donde**: decir solo "difiere" deja al que
+/// empuja comparando los dos cuerpos a ojo.
+#[test]
+fn un_cuerpo_que_difiere_dice_en_que_linea() {
+    let dir = panorama("uno\n\ndos\n\ntres", "igual");
+    let p = Rico(HashMap::from([
+        (
+            "ACC-101".to_string(),
+            Snapshot {
+                status: Some("open".into()),
+                description: Some(adf("uno\n\nDOS\n\ntres")),
+                ..Default::default()
+            },
+        ),
+        ("ACC-102".to_string(), Snapshot { status: Some("open".into()), ..Default::default() }),
+    ]));
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    assert_eq!(r.differences.len(), 1);
+    let d = &r.differences[0];
+    assert_eq!(d.field, "cuerpo");
+    assert_eq!(d.line, Some(3), "la tercera linea es la que cambia");
+    assert_eq!(d.tip, "dos");
+    assert_eq!(d.live, "DOS");
+}
+
+/// Una clave que el proveedor no informa **no se cuenta como comparada**: no es
+/// una que coincida, es una que no se vio. Ver `commands/push-states.md`.
+#[test]
+fn una_clave_que_el_proveedor_no_informa_no_cuenta_como_comparada() {
+    let dir = panorama("igual", "igual");
+    let p = Rico(HashMap::from([(
+        "ACC-101".to_string(),
+        Snapshot { status: Some("open".into()), ..Default::default() },
+    )]));
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    assert_eq!(r.compared, 1);
+    assert_eq!(r.uninformed, vec!["ACC-102".to_string()]);
+    assert!(r.differences.is_empty());
 }

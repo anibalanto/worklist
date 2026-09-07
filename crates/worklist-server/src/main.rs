@@ -43,6 +43,20 @@ enum Cmd {
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo de pre-receive.
         #[arg(long)]
         stdin: bool,
+        /// Compara y **no rechaza**: reporta lo que difiere y sale con cero.
+        ///
+        /// Es lo que hace falta para cruzar la instalacion al proveedor real:
+        /// el titulo y el cuerpo nunca se compararon contra nada, asi que
+        /// encenderlos de golpe es enterarse de cuantos difieren cuando ya
+        /// rechazan. Ver `commands/check-push.md`.
+        #[arg(long)]
+        dry_run: bool,
+        /// Sobre que rama comparar. **Solo con `--dry-run`**, y por defecto el
+        /// panorama, que es el unico con el inventario completo. Sin
+        /// `--dry-run` el rango sale de `--stdin` o de la rama actual, asi que
+        /// aca no significaria nada.
+        #[arg(long = "ref")]
+        refname: Option<String>,
     },
     /// Manipula el proveedor de prueba directamente, sin pasar por git.
     Provider {
@@ -276,8 +290,17 @@ enum ProviderCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::CheckPush { provider_file, project, states_map, base, account, stdin } => {
-            cmd_check_push(provider_file, project, states_map, &base, account.as_deref(), stdin)
+        Cmd::CheckPush { provider_file, project, states_map, base, account, stdin, dry_run, refname } => {
+            cmd_check_push(
+                provider_file,
+                project,
+                states_map,
+                &base,
+                account.as_deref(),
+                stdin,
+                dry_run,
+                refname,
+            )
         }
         Cmd::Provider { sub: ProviderCmd::SetStatus { provider_file, clave, status } } => {
             let provider = FileProvider::new(provider_file);
@@ -952,6 +975,39 @@ fn states_del_panorama(repo: &std::path::Path) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Una diferencia encontrada, con la etiqueta que dice si costo el push.
+///
+/// **La misma linea en los dos casos**, porque es el mismo hallazgo: lo unico
+/// que cambia es si alguien la esta usando para rechazar. Dos formatos serian
+/// dos cosas que mantener de acuerdo, y la medicion existe justamente para
+/// anticipar lo que el rechazo va a decir.
+fn print_difference(r: &worklist_provider::check_push::RejectedKey, tag: &str, indent: &str) {
+    // Un rechazo por regla se lee distinto de uno por deriva, porque lo que hay
+    // que hacer es distinto: el primero no se arregla reintentando. Ver
+    // `concepts/states.md`.
+    if r.field == "transicion" {
+        println!("{indent}{tag}: {} no se puede mover a \"{}\" — {}", r.key, r.tip, r.live);
+        match &r.disponibles {
+            Some(d) if !d.is_empty() => println!("{indent}        disponibles: {}", d.join(", ")),
+            Some(_) => println!("{indent}        el workflow no ofrece ninguna transicion"),
+            None => println!("{indent}        no se pudieron listar las disponibles"),
+        }
+        return;
+    }
+    // El cuerpo no entra en una linea: se dice **donde** empieza a diferir y se
+    // muestran los dos lados de esa linea sola. Ver `commands/check-push.md`.
+    if let Some(line) = r.line {
+        println!("{indent}{tag}: {} cuerpo difiere — linea {line}", r.key);
+        println!("{indent}        tip:       {}", r.tip);
+        println!("{indent}        proveedor: {}", r.live);
+        return;
+    }
+    println!(
+        "{indent}{tag}: {} {} era \"{}\" en el tip, el proveedor dice \"{}\"",
+        r.key, r.field, r.tip, r.live
+    );
+}
+
 fn cmd_check_push(
     provider_file: Option<PathBuf>,
     project: Option<String>,
@@ -959,7 +1015,16 @@ fn cmd_check_push(
     base: &str,
     account: Option<&str>,
     stdin: bool,
+    dry_run: bool,
+    refname: Option<String>,
 ) -> Result<()> {
+    // Decirlo en vez de ignorarlo: sin `--dry-run` el rango sale de `--stdin` o
+    // de la rama actual, asi que `--ref` no tendria a que aplicarse.
+    if refname.is_some() && !dry_run {
+        anyhow::bail!(
+            "--ref es solo de --dry-run: sin el, el rango sale de --stdin o de la rama actual"
+        );
+    }
     // Uno de los dos, y el de prueba solo informa el status: con el, el cuerpo
     // y el titulo no se comparan. Ver `concepts/sync.md`.
     let real = project.is_some();
@@ -1002,6 +1067,36 @@ fn cmd_check_push(
     // viejo".
     println!("worklist-server {}", env!("CARGO_PKG_VERSION"));
 
+    // Comparar sin rechazar: una rama entera, ningun push, y salida cero
+    // difiera lo que difiera. Lo que ese codigo informa es si la medicion se
+    // pudo hacer, no su resultado. Ver `commands/check-push.md`.
+    if dry_run {
+        let refname = refname.unwrap_or_else(|| worklist_core::git::PANORAMA.to_string());
+        let report = worklist_provider::check_push::check_ref(&repo, &refname, provider, &estados)?;
+        println!("{refname}: {} claves comparadas", report.compared);
+        // Una clave que el proveedor no informa no es una que coincida: es una
+        // que no se vio. Va aparte porque lo que hay que hacer con ella es
+        // averiguar por que no esta. Ver `commands/push-states.md`.
+        if !report.uninformed.is_empty() {
+            println!(
+                "  sin informar ({}): {}",
+                report.uninformed.len(),
+                report.uninformed.join(", ")
+            );
+        }
+        for r in &report.differences {
+            print_difference(r, "difiere", "  ");
+        }
+        let cuantas = |field: &str| report.differences.iter().filter(|r| r.field == field).count();
+        println!(
+            "resumen: status {}, titulo {}, cuerpo {}",
+            cuantas("status"),
+            cuantas("titulo"),
+            cuantas("cuerpo")
+        );
+        return Ok(());
+    }
+
     let lines: Vec<(String, String, String)> = if stdin {
         let mut out = Vec::new();
         for line in std::io::stdin().lock().lines() {
@@ -1030,27 +1125,9 @@ fn cmd_check_push(
             continue;
         }
         let rejected = check_one(&repo, &old, &new, &refname, provider, &estados)?;
-        for r in rejected {
+        for r in &rejected {
             any_rejected = true;
-            // Un rechazo por regla se lee distinto de uno por deriva, porque
-            // lo que hay que hacer es distinto: el primero no se arregla
-            // reintentando. Ver `concepts/states.md`.
-            if r.field == "transicion" {
-                println!(
-                    "reject: {} no se puede mover a \"{}\" — {}",
-                    r.key, r.tip_status, r.live_status
-                );
-                match &r.disponibles {
-                    Some(d) if !d.is_empty() => println!("        disponibles: {}", d.join(", ")),
-                    Some(_) => println!("        el workflow no ofrece ninguna transicion"),
-                    None => println!("        no se pudieron listar las disponibles"),
-                }
-                continue;
-            }
-            println!(
-                "reject: {} {} era \"{}\" en el tip, el proveedor dice \"{}\"",
-                r.key, r.field, r.tip_status, r.live_status
-            );
+            print_difference(r, "reject", "");
         }
         // Y lo mismo contra el panorama: de `all` se corta todo, asi que un
         // conflicto escrito ahi entra en el proximo recorte de cada ventana.
