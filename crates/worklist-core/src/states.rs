@@ -2,8 +2,9 @@
 //!
 //! **Vive en el core y no en el proveedor**, y el corte es el mismo que el de
 //! los archivos: el vocabulario es del proyecto —esta en git, en
-//! `.metadata/states.yaml` del panorama— y el **mapeo** a los estados del
-//! proveedor es de la instalacion, asi que vive del lado que habla con el.
+//! `.metadata/states.yaml`, y viaja con cada recorte— y el **mapeo** a los
+//! estados del proveedor es de la instalacion, asi que vive del lado que habla
+//! con el.
 //!
 //! De ahi sale que el cliente pueda validar un estado sin enlazar el proveedor:
 //! saber que `done` existe es de este lado; saber que del otro lado se llama
@@ -42,15 +43,16 @@ fn por_defecto() -> Vec<String> {
     POR_DEFECTO.iter().map(|s| s.to_string()).collect()
 }
 
-/// El vocabulario del panorama, leido desde cualquier worktree del repo.
+/// El vocabulario de la vista donde uno esta parado.
 ///
-/// **Se lee del panorama y no de la vista donde uno esta parado**: el
-/// vocabulario es del proyecto entero, y un recorte lleva los items de su
-/// sprint y nada mas. Los worktrees comparten refs, asi que `insecure/all`
-/// esta a mano incluso parado en una ventana.
-pub fn del_panorama(repo: &std::path::Path) -> Option<String> {
+/// **Se lee de la vista y no del panorama**, que es lo que hacia antes: el
+/// panorama ya no esta del lado del cliente, asi que `insecure/all` no es una
+/// ref que este a mano. El vocabulario sigue siendo del proyecto entero —lo
+/// que cambio es de donde se lo lee—, y para eso `window_files` lo mete en
+/// cada recorte. Ver `concepts/states.md`.
+pub fn de_la_vista(repo: &std::path::Path) -> Option<String> {
     let out = crate::git_command(repo)
-        .args(["show", &format!("{}:{ARCHIVO}", crate::git::PANORAMA)])
+        .args(["show", &format!("HEAD:{ARCHIVO}")])
         .output()
         .ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())

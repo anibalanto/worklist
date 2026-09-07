@@ -10,6 +10,11 @@
 //! cuando el push llega. **Que el efecto final sea del proveedor no hace que el
 //! comando lo sea.**
 //!
+//! **`window open` no esta aca, y estuvo.** Se fue al servidor cuando el
+//! panorama dejo de estar de este lado: sin `insecure/all` local no hay de
+//! donde cortar. Lo que le queda al cliente para tener su ventana es `git
+//! fetch` y un worktree.
+//!
 //! Lo que falta ya esta decidido y sin implementar: `sync`, `view add`, `new`,
 //! `status`, `is-secure`.
 
@@ -25,11 +30,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Recorta una ventana: la rama con los items de un sprint y nada mas.
-    Window {
-        #[command(subcommand)]
-        sub: WindowCmd,
-    },
     /// El estado de un item.
     State {
         #[command(subcommand)]
@@ -53,36 +53,9 @@ enum StateCmd {
     Change { id: String, estado: String },
 }
 
-#[derive(Subcommand)]
-enum WindowCmd {
-    Open {
-        sprint_id: String,
-        #[arg(long, default_value = "insecure/all")]
-        from: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// No replanta: el corte nuevo reemplaza a la ventana, descartando
-        /// lo que tenia encima. Ver `commands/window-open.md`.
-        #[arg(long)]
-        force: bool,
-    },
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::Window { sub: WindowCmd::Open { sprint_id, from, dry_run, force } } => {
-            let repo = std::env::current_dir()?;
-            let (files, head) = worklist_core::window::open(&repo, &sprint_id, &from, dry_run, force)?;
-            println!("secure/sprint/{sprint_id}: {} archivo(s)", files.len());
-            for f in &files {
-                println!("  {f}");
-            }
-            if !dry_run {
-                println!("recortado desde {from} -> {}", short(&head));
-            }
-            Ok(())
-        }
         Cmd::State { sub: StateCmd::Change { id, estado } } => {
             let repo = std::env::current_dir()?;
             let vocabulario = vocabulario(&repo);
@@ -131,8 +104,11 @@ fn main() -> Result<()> {
 }
 
 /// El vocabulario que el proyecto declara, o el que worklist trae.
+///
+/// Se lee de la vista donde uno esta parado: el panorama no esta de este lado,
+/// asi que el vocabulario viaja adentro del recorte. Ver `concepts/states.md`.
 fn vocabulario(repo: &std::path::Path) -> Vec<String> {
-    worklist_core::states::vocabulario(worklist_core::states::del_panorama(repo).as_deref())
+    worklist_core::states::vocabulario(worklist_core::states::de_la_vista(repo).as_deref())
 }
 
 fn ahora() -> String {
@@ -144,8 +120,4 @@ fn ahora() -> String {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
-}
-
-fn short(sha: &str) -> &str {
-    &sha[..7.min(sha.len())]
 }

@@ -17,6 +17,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Recorta una ventana: la rama con los items de un sprint y nada mas.
+    ///
+    /// **Es del servidor por los dos criterios a la vez**: lee el panorama,
+    /// que vive de un solo lado, y escribe la rama de la ventana, que es un
+    /// artefacto. El cliente la trae con `git fetch` y un worktree — no tiene
+    /// de donde cortar, porque no tiene el panorama. Ver
+    /// `concepts/distribution.md`.
+    Window {
+        #[command(subcommand)]
+        sub: WindowCmd,
+    },
     /// El compare-and-swap de una ventana. Pensado para `hooks/pre-receive`.
     CheckPush {
         /// El proveedor de prueba: un archivo `clave -> status`. Solo informa
@@ -278,6 +289,21 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum WindowCmd {
+    Open {
+        sprint_id: String,
+        #[arg(long, default_value = "insecure/all")]
+        from: String,
+        #[arg(long)]
+        dry_run: bool,
+        /// No replanta: el corte nuevo reemplaza a la ventana, descartando
+        /// lo que tenia encima. Ver `commands/window-open.md`.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProviderCmd {
     SetStatus {
         #[arg(long)]
@@ -301,6 +327,18 @@ fn main() -> Result<()> {
                 dry_run,
                 refname,
             )
+        }
+        Cmd::Window { sub: WindowCmd::Open { sprint_id, from, dry_run, force } } => {
+            let repo = std::env::current_dir()?;
+            let (files, head) = worklist_core::window::open(&repo, &sprint_id, &from, dry_run, force)?;
+            println!("secure/sprint/{sprint_id}: {} archivo(s)", files.len());
+            for f in &files {
+                println!("  {f}");
+            }
+            if !dry_run {
+                println!("recortado desde {from} -> {}", short(&head));
+            }
+            Ok(())
         }
         Cmd::Provider { sub: ProviderCmd::SetStatus { provider_file, clave, status } } => {
             let provider = FileProvider::new(provider_file);

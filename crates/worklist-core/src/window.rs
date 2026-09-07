@@ -68,9 +68,10 @@ fn sprint_items(repo: &Path, rev: &str, sprint_file: &str) -> Result<Vec<String>
 
 /// Los archivos que lleva la ventana del sprint `sprint_id` en `rev`.
 ///
-/// El `.sprint.md`, los items que declara **con todo su subarbol**, y los
-/// ancestros de cada uno — en la practica la epica, que viaja de solo lectura
-/// para que la cadena `parent` cierre adentro.
+/// El `.sprint.md`, los items que declara **con todo su subarbol**, los
+/// ancestros de cada uno —en la practica la epica, que viaja de solo lectura
+/// para que la cadena `parent` cierre adentro— y el vocabulario de estados,
+/// que viaja por lo mismo: el cliente no tiene el panorama de donde leerlo.
 pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<String>> {
     let sprint_file = format!("_sprints/{sprint_id}.sprint.md");
     let declared = sprint_items(repo, rev, &sprint_file)?;
@@ -118,6 +119,12 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
 
     let mut files: Vec<String> = keep.iter().map(|id| items[id].file.clone()).collect();
     files.push(sprint_file);
+    // El vocabulario, si el proyecto lo declara: sin el, `state change` parado
+    // en la ventana cae al vocabulario por defecto y rechaza un estado que el
+    // proyecto si declara. Ver `concepts/states.md`.
+    if git_output(repo, &["cat-file", "-e", &format!("{rev}:{}", crate::states::ARCHIVO)]).is_ok() {
+        files.push(crate::states::ARCHIVO.to_string());
+    }
     files.sort();
     Ok(files)
 }

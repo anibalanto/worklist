@@ -313,3 +313,31 @@ fn opening_a_window_checked_out_somewhere_refuses() {
     .unwrap();
     assert!(status.trim().is_empty(), "el worktree no se toco: {status:?}");
 }
+
+/// El vocabulario es del proyecto y vive en el panorama, que el cliente ya no
+/// tiene. Sin esto, `state change` parado en la ventana cae al vocabulario por
+/// defecto y rechaza un estado que el proyecto si declara.
+#[test]
+fn la_ventana_lleva_el_vocabulario() {
+    let dir = repo_con_arbol();
+    let r = dir.path();
+    std::fs::create_dir(r.join(".metadata")).unwrap();
+    std::fs::write(r.join(".metadata/states.yaml"), "states: [open, review, done]\n").unwrap();
+    run(r, &["add", "-A"]);
+    run(r, &["commit", "-q", "-m", "vocabulario"]);
+
+    let files = worklist_core::window::window_files(r, "HEAD", "10").unwrap();
+
+    assert!(
+        files.contains(&".metadata/states.yaml".to_string()),
+        "la ventana tiene que cerrar adentro: {files:?}"
+    );
+}
+
+/// Y un proyecto que no lo declara no gana un archivo que no existe.
+#[test]
+fn sin_vocabulario_declarado_la_ventana_no_inventa_uno() {
+    let dir = repo_con_arbol();
+    let files = worklist_core::window::window_files(dir.path(), "HEAD", "10").unwrap();
+    assert!(!files.iter().any(|f| f.starts_with(".metadata/")));
+}
