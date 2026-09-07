@@ -32,6 +32,9 @@ enum Outcome {
         /// `pull` que no pregunto no dice "al dia" a secas**: eso seria
         /// afirmar sobre la mitad que no miro.
         proveedor: Option<Result<String, String>>,
+        /// Que dijo la membresia, o por que no se pudo preguntar. Es la otra
+        /// mitad del paso 0, y se reporta aparte porque es otra pregunta.
+        membresia: Option<Result<String, String>>,
     },
     /// `--dry-run`: se dijo que pasaria, y no se toco nada. **No es "al dia"**
     /// — decirlo seria afirmar algo que esta corrida no hizo.
@@ -79,7 +82,17 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
 
     for v in &objetivo {
         match una(v, &bare, dry_run) {
-            Ok(Outcome::AlDia { replantados, caidos, proveedor }) => {
+            Ok(Outcome::AlDia { replantados, caidos, proveedor, membresia }) => {
+                // La membresia se dice sola cuando saco algo: es una baja que
+                // alguien hizo del otro lado, no un detalle del comando.
+                if let Some(Ok(r)) = &membresia {
+                    if !r.starts_with("0 baja") {
+                        println!("  el board saco del sprint: {r}");
+                    }
+                }
+                if let Some(Err(porque)) = &membresia {
+                    println!("  la membresia no se pudo preguntar: {porque}");
+                }
                 if all {
                     println!("{}: {}", v.branch, cierre(&proveedor));
                 } else {
@@ -207,6 +220,10 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     // cierta la palabra "al dia" — sin esto, `pull` pone al dia la mitad de lo
     // que puede estar viejo y lo dice igual.
     let proveedor = absorber(bare, &branch_ref);
+    // Y la membresia, que **va antes del recorte**: escribe el `items` de la
+    // composicion, y el corte sale de ahi. Preguntarla despues dejaria la
+    // ventana con un item que el board ya no tiene en su sprint.
+    let membresia = membresia(bare);
 
     // Paso 1 — el corte de hoy, donde esta el panorama. Es del servidor, y no
     // hace falta ningun canal porque el bare esta en la misma maquina. El dia
@@ -242,14 +259,14 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     let (contiene, _) =
         try_git(&v.path, &["merge-base", "--is-ancestor", &tip, &antes])?;
     if contiene {
-        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: Some(proveedor) });
+        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: Some(proveedor), membresia: Some(membresia) });
     }
     // Nada sin empujar: el corte nuevo trae todo mi trabajo, y replantarlo
     // seria pedirle a git que redescubra por patch-id algo que ya se sabe. Y
     // no lo puede contestar: arriba el cuerpo quedo en su forma canonica.
     if todo_subido {
         git_output(&v.path, &["reset", "--hard", "--quiet", &tip])?;
-        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: Some(proveedor) });
+        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: Some(proveedor), membresia: Some(membresia) });
     }
 
     // El replante lo hace `core`, que es donde se puede probar contra un
@@ -262,7 +279,7 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
         return Ok(Outcome::Amedias { linea, files });
     }
     let (replantados, caidos) = (r.replantados, r.caidos);
-    Ok(Outcome::AlDia { replantados, caidos, proveedor: Some(proveedor) })
+    Ok(Outcome::AlDia { replantados, caidos, proveedor: Some(proveedor), membresia: Some(membresia) })
 }
 
 /// El paso 0: lo que cambio en el board, adentro de la ventana.
@@ -279,6 +296,37 @@ fn absorber(bare: &Path, branch_ref: &str) -> Result<String, String> {
         .arg("absorb")
         .args(["--ref", branch_ref])
         .args(&config)
+        .current_dir(bare)
+        .output()
+        .map_err(|_| "no encuentro `worklist-server`".to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("").to_string());
+    }
+    let texto = String::from_utf8_lossy(&out.stdout);
+    Ok(texto
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("resumen:"))
+        .unwrap_or("")
+        .trim_start_matches("resumen:")
+        .trim()
+        .to_string())
+}
+
+/// El paso 0, segunda mitad: las bajas de membresia que el board hizo.
+///
+/// **El proveedor manda**: si el board saco un item del sprint, sale del
+/// `items`. Y va antes del recorte, porque el corte sale de ese `items`.
+///
+/// Necesita `--project` y `--board`, que estan en el `post-receive` y no en el
+/// `pre-receive` — son dos hooks con dos configuraciones distintas.
+fn membresia(bare: &Path) -> Result<String, String> {
+    let Some(conexion) = crate::status::conexion_al_board(bare) else {
+        return Err("el servidor no tiene hooks con `--project` y `--board`".into());
+    };
+    let out = std::process::Command::new("worklist-server")
+        .arg("membership")
+        .args(&conexion)
         .current_dir(bare)
         .output()
         .map_err(|_| "no encuentro `worklist-server`".to_string())?;

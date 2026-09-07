@@ -152,18 +152,59 @@ fn una(v: &crate::pull::View, bare: &Path, verify: bool) -> Result<bool> {
 /// Es una costura, y se sabe: la configuracion del proveedor no tiene casa
 /// propia, asi que se lee del unico lugar donde hoy es autoritativa.
 pub fn args_del_hook(bare: &Path) -> Option<Vec<String>> {
-    let hook = std::fs::read_to_string(bare.join("hooks/pre-receive")).ok()?;
-    let linea = hook.lines().find(|l| l.contains("check-push"))?;
-    let mut args: Vec<String> = Vec::new();
-    let mut vistos = linea.split_whitespace().skip_while(|t| *t != "check-push").skip(1);
-    while let Some(t) = vistos.next() {
-        // `--stdin` es el protocolo del hook: acá no llega ningún push.
-        if t == "--stdin" {
-            continue;
-        }
-        args.push(t.to_string());
-    }
+    args_de(bare, "pre-receive", "check-push")
+}
+
+/// Los argumentos con los que la instalacion invoca `<sub>` desde `<hook>`.
+///
+/// **Son dos hooks y no uno.** El `pre-receive` corre `check-push` con el
+/// proveedor de comparacion; el `post-receive` corre `assign-keys` con
+/// `--project` y `--board`, que es lo que hace falta para preguntarle al board
+/// que tiene un sprint adentro. Leer del que no es devuelve los argumentos
+/// equivocados, y eso es peor que no leer nada.
+pub fn args_de(bare: &Path, hook: &str, sub: &str) -> Option<Vec<String>> {
+    let texto = std::fs::read_to_string(bare.join(format!("hooks/{hook}"))).ok()?;
+    // **Salteando los comentarios**, que es lo que hizo falta: el
+    // `post-receive` nombra `assign-keys` en un comentario antes de la linea
+    // que lo corre, asi que buscar "la primera que lo menciona" agarraba el
+    // comentario y devolvia cero argumentos.
+    let linea = texto
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.starts_with('#') && l.split_whitespace().any(|t| t == sub))?;
+    let args: Vec<String> = linea
+        .split_whitespace()
+        .skip_while(|t| *t != sub)
+        .skip(1)
+        // `--stdin` es el protocolo del hook: aca no llega ningun push.
+        .filter(|t| *t != "--stdin")
+        .map(|t| t.to_string())
+        .collect();
     Some(args)
+}
+
+/// De los argumentos del `post-receive`, los que sirven para preguntarle al
+/// board: `--project`, `--board`, `--base` y `--account`.
+///
+/// Se filtran y no se pasan enteros porque `assign-keys` toma flags que otros
+/// comandos no —`--states-map`, `--all-windows`— y un flag desconocido no es
+/// un default: es un error de arranque.
+pub fn conexion_al_board(bare: &Path) -> Option<Vec<String>> {
+    let args = args_de(bare, "post-receive", "assign-keys")?;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if matches!(args[i].as_str(), "--project" | "--board" | "--base" | "--account") {
+            if let Some(v) = args.get(i + 1) {
+                out.push(args[i].clone());
+                out.push(v.clone());
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Lo caro, y lo hace el servidor.
