@@ -14,7 +14,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use worklist_core::git::{cherry_pick_one, git_output, rev_parse, try_git, Picked};
+use worklist_core::git::{git_output, rev_parse, try_git};
 
 /// Una vista del clon: su worktree y la rama que tiene checkouteada.
 pub struct View {
@@ -145,24 +145,12 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     // `fetch`** — incluido el de un `--dry-run`. Una fuente que la propia
     // consulta desplaza no puede contestar esta pregunta.
     let subido = rev_parse(bare, &worklist_core::git::propagated_ref(&branch_ref));
-    // Y la pregunta es si **todo lo mio** subio, no si mi punta *es* la marca.
-    // El servidor commitea encima de lo que recibe —el `rename`, el
-    // `normalize:`— asi que despues de un push la marca esta adelante de mi
-    // HEAD y las dos comparaciones dan distinto.
-    //
-    // Medido el 2026-09-07, y no es cosmetico: comparando por igualdad, el
-    // commit que **creaba** un item se replantaba despues de que el servidor lo
-    // renombrara, y volvia a escribir el archivo con el slug viejo. La ventana
-    // quedaba con `@el-slug.task.md` y `ACC-325.task.md`, que son el mismo item.
-    //
-    // Se pregunta en el bare porque la marca apunta a la historia del servidor,
-    // que un `fetch` no necesariamente trae — y ahi el objeto puede no existir.
-    let todo_subido = subido.as_deref().is_some_and(|marca| {
-        try_git(bare, &["merge-base", "--is-ancestor", &antes, marca])
-            .map(|(ok, _)| ok)
-            .unwrap_or(false)
-    });
-
+    // Si el servidor ya tiene **todo lo mio** no hay nada que replantar. La
+    // pregunta la contesta `core`, que es donde se puede probar contra un
+    // servidor de mentira — y no es *"mi punta es la marca"*: el servidor
+    // commitea encima de lo que recibe, asi que despues de un push nunca son lo
+    // mismo.
+    let todo_subido = worklist_core::window::propagado_entero(bare, &branch_ref, &antes);
     if dry_run {
         // No se le pide el corte al servidor y **no se hace `fetch`**: la
         // punta de hoy se lee del bare, que la tiene. Un dry-run que mueve
@@ -230,62 +218,16 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
         return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new() });
     }
 
-    // Lo mio es lo que la punta del servidor no tiene, y eso es el rango y
-    // nada mas. **No se busca el corte para esto**: el corte se busca contra el
-    // panorama, que de este lado no esta — y cuando el recorte es idempotente
-    // la punta del servidor *es* el corte, con lo que buscarlo ahi encuentra mi
-    // propio trabajo y no un `window:`.
-    let mios = git_output(&v.path, &["log", "--oneline", &format!("{tip}..{antes}")])?;
-    let shas = git_output(&v.path, &["rev-list", "--reverse", &format!("{tip}..{antes}")])?;
-
-    git_output(&v.path, &["reset", "--hard", "--quiet", &tip])?;
-
-    let mut replantados = 0;
-    let mut caidos = Vec::new();
-    for sha in shas.lines() {
-        let subject = git_output(&v.path, &["log", "-1", "--format=%s", sha])?.trim().to_string();
-        // El corte **nunca** se replanta: es un commit que borra lo que el
-        // recorte dejo afuera, y re-aplicarlo sobre un panorama que crecio
-        // no menciona lo nuevo, asi que lo nuevo entra. El de hoy ya vino en
-        // el `fetch`; el mio, si el servidor recorto distinto, se cae aca.
-        if subject.starts_with("window: ") {
-            continue;
-        }
-        let linea = || {
-            mios.lines()
-                .find(|l| l.starts_with(&sha[..7.min(sha.len())]))
-                .unwrap_or(sha)
-                .to_string()
-        };
-        match cherry_pick_one(&v.path, sha)? {
-            Picked::Applied => replantados += 1,
-            // Ya subio: el corte nuevo lo contiene y el cherry-pick no aporta.
-            Picked::Empty => {}
-            // Ya subio **escrito de otra manera**: el panorama guarda la vuelta
-            // del round-trip y este commit guarda lo que se tipeo. No hay dos
-            // versiones que reconciliar — hay una superada y una vigente.
-            Picked::Superseded => {
-                caidos.push(format!("{} (ya esta en el corte modulo normalizacion)", linea()))
-            }
-            // Gana el corte: la planificacion —`status` e `items`— se edita en
-            // el panorama y baja regenerando, asi que este commit choca contra
-            // un `items` que ya quedo viejo y no proponia nada sobre el.
-            Picked::Conflict { ref files, .. } if worklist_core::git::planning_only(files) => {
-                caidos.push(format!("{} (la planificacion del sprint es del panorama)", linea()))
-            }
-            // El renombre, la normalizacion y la clave del sprint se rehacen
-            // arriba: si chocan, el corte ya los trae hechos.
-            Picked::Conflict { .. } if worklist_core::git::redone_above(&subject) => {
-                caidos.push(format!("{} (el corte ya lo trae rehecho)", linea()))
-            }
-            Picked::Conflict { files, .. } => {
-                // La vista vuelve a como estaba: quedar a medias adentro de un
-                // cherry-pick abortado es peor que no haber empezado.
-                git_output(&v.path, &["reset", "--hard", "--quiet", &antes])?;
-                return Ok(Outcome::Amedias { linea: linea(), files });
-            }
-        }
+    // El replante lo hace `core`, que es donde se puede probar contra un
+    // servidor de mentira. Lo mio es lo que la punta del servidor no tiene, y
+    // eso es el rango y nada mas — **el corte no se busca**: se busca contra el
+    // panorama, que de este lado no esta, y cuando el recorte es idempotente la
+    // punta del servidor *es* el corte.
+    let r = worklist_core::window::replantar(&v.path, &tip, &antes)?;
+    if let Some((linea, files)) = r.conflicto {
+        return Ok(Outcome::Amedias { linea, files });
     }
+    let (replantados, caidos) = (r.replantados, r.caidos);
     Ok(Outcome::AlDia { replantados, caidos })
 }
 

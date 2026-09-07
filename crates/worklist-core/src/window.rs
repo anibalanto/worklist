@@ -373,3 +373,88 @@ pub fn open(
 
     Ok((files, head))
 }
+
+/// Si el servidor ya tiene **todo** lo de esta vista.
+///
+/// No es *"mi punta es la marca"*: el servidor commitea encima de lo que
+/// recibe —el `rename`, el `normalize:`, la clave del sprint— asi que despues
+/// de un push la marca esta **adelante** de mi HEAD y las dos comparaciones dan
+/// distinto.
+///
+/// Medido el 2026-09-07: comparando por igualdad, el commit que **creaba** un
+/// item se replantaba despues de que el servidor lo renombrara, y volvia a
+/// escribir el archivo con el slug viejo — la vista quedaba con el item dos
+/// veces, con dos nombres.
+///
+/// Se pregunta **en el bare**: la marca apunta a la historia del servidor, que
+/// un `fetch` no necesariamente trae, y ahi el objeto puede no existir de este
+/// lado.
+pub fn propagado_entero(bare: &Path, branch_ref: &str, head: &str) -> bool {
+    let Some(marca) = crate::git::rev_parse(bare, &crate::git::propagated_ref(branch_ref)) else {
+        return false;
+    };
+    crate::git::try_git(bare, &["merge-base", "--is-ancestor", head, &marca])
+        .map(|(ok, _)| ok)
+        .unwrap_or(false)
+}
+
+/// Como quedo un replante: que se aplico, que se dejo caer y por que.
+pub struct Replante {
+    pub replantados: usize,
+    /// Lo que no se replanto **porque ya estaba**, con el motivo al lado. Son
+    /// tres, y decirlos aparte es la diferencia entre un descarte y una perdida.
+    pub caidos: Vec<String>,
+    /// El unico choque que informa algo: el trabajo toca un item que el `items`
+    /// de hoy ya no lleva.
+    pub conflicto: Option<(String, Vec<String>)>,
+}
+
+/// Replanta sobre `tip` lo que la vista tiene y `tip` no.
+///
+/// Es el paso 3 de `worklist pull`, y vive aca —y no en el binario del
+/// cliente— porque es donde se puede probar contra un servidor de mentira.
+///
+/// **El corte nunca se replanta**: es un commit que borra lo que el recorte
+/// dejo afuera, y re-aplicarlo sobre un panorama que crecio no menciona lo
+/// nuevo, asi que lo nuevo entra.
+pub fn replantar(view: &Path, tip: &str, desde: &str) -> Result<Replante> {
+    let mios = git_output(view, &["log", "--oneline", &format!("{tip}..{desde}")])?;
+    let shas = git_output(view, &["rev-list", "--reverse", &format!("{tip}..{desde}")])?;
+    let antes = git_output(view, &["rev-parse", "HEAD"])?.trim().to_string();
+
+    git_output(view, &["reset", "--hard", "--quiet", tip])?;
+
+    let mut r = Replante { replantados: 0, caidos: Vec::new(), conflicto: None };
+    for sha in shas.lines() {
+        let subject = git_output(view, &["log", "-1", "--format=%s", sha])?.trim().to_string();
+        if subject.starts_with("window: ") {
+            continue;
+        }
+        let linea = mios
+            .lines()
+            .find(|l| l.starts_with(&sha[..7.min(sha.len())]))
+            .unwrap_or(sha)
+            .to_string();
+        match crate::git::cherry_pick_one(view, sha)? {
+            crate::git::Picked::Applied => r.replantados += 1,
+            crate::git::Picked::Empty => {}
+            crate::git::Picked::Superseded => {
+                r.caidos.push(format!("{linea} (ya esta en el corte modulo normalizacion)"))
+            }
+            crate::git::Picked::Conflict { ref files, .. } if crate::git::planning_only(files) => {
+                r.caidos.push(format!("{linea} (la planificacion del sprint es del panorama)"))
+            }
+            crate::git::Picked::Conflict { .. } if crate::git::redone_above(&subject) => {
+                r.caidos.push(format!("{linea} (el corte ya lo trae rehecho)"))
+            }
+            crate::git::Picked::Conflict { files, .. } => {
+                // La vista vuelve a como estaba: quedar a medias adentro de un
+                // cherry-pick abortado es peor que no haber empezado.
+                git_output(view, &["reset", "--hard", "--quiet", &antes])?;
+                r.conflicto = Some((linea, files));
+                return Ok(r);
+            }
+        }
+    }
+    Ok(r)
+}
