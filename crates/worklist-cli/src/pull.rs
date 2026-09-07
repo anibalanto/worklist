@@ -49,7 +49,17 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
         }
     };
 
-    let bare = servidor(&objetivo[0].path)?;
+    // Parado afuera del clon del worklist no hay ninguna vista, y eso es lo
+    // que mas pasa: la raiz del proyecto y las capas impl son otros repos.
+    // Decirlo es mejor que buscar en cero.
+    let Some(primera) = objetivo.first() else {
+        bail!(
+            "no hay ninguna vista del worklist desde aca: `{}` no es el clon del worklist.\n\
+             Las vistas cuelgan de `.worklist/secure/**`.",
+            cwd.display()
+        );
+    };
+    let bare = servidor(&primera.path)?;
     let mut amedias: Vec<(String, String, Vec<String>)> = Vec::new();
 
     for v in &objetivo {
@@ -73,7 +83,11 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
 
     if amedias.is_empty() {
         if all {
-            println!("{} vistas, todas al dia", objetivo.len());
+            // Un `--dry-run` no dejo ninguna al dia: dijo lo que pasaria. La
+            // linea final es la que se lee, asi que es la que menos puede
+            // afirmar de mas.
+            let cierre = if dry_run { "sin tocar nada" } else { "todas al dia" };
+            println!("{} vistas, {cierre}", objetivo.len());
         }
         return Ok(());
     }
