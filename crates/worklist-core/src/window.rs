@@ -185,12 +185,26 @@ pub fn open(
     // descarta. El corte viejo no: es un commit que borra una lista fija de
     // rutas, y re-aplicarlo sobre un panorama que crecio no menciona lo nuevo,
     // asi que lo nuevo entra. Ver `concepts/propagation.md`.
-    let previo = if force { None } else { work_above_cut(repo, &branch, from)? };
+    //
+    // Y si la ventana esta propagada entera, el corte nuevo la contiene **por
+    // construccion**: sale del panorama, que ya tiene todo su trabajo.
+    // Preguntarselo commit por commit es pedirle a git que redescubra por
+    // patch-id algo que el servidor ya tiene anotado en una ref — y el
+    // patch-id no lo puede contestar, porque arriba el cuerpo quedo guardado
+    // en su forma canonica y abajo como se tipeo. Es el mismo trato que la ref
+    // ya recibe subiendo: un dato que alguien sostiene se guarda, no se busca.
+    let propagada = crate::git::rev_parse(repo, &crate::git::propagated_ref(&branch))
+        .is_some_and(|subido| crate::git::rev_parse(repo, &branch).as_deref() == Some(&subido));
+    let previo =
+        if force || propagada { None } else { work_above_cut(repo, &branch, from)? };
 
     let tmp = repo.join(format!("../.worklist-window-{sprint_id}"));
     let _ = std::fs::remove_dir_all(&tmp);
     git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), from])?;
 
+    // El corte queda afuera del cierre para poder anotarlo despues: es el
+    // punto hasta el cual la rama nueva esta propagada por construccion.
+    let mut corte_nuevo = String::new();
     let result = (|| -> Result<String> {
         let keep: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
         let listing = git_output(&tmp, &["ls-files"])?;
@@ -202,11 +216,11 @@ pub fn open(
         }
         crate::commit_all(&tmp, &format!("window: sprint/{sprint_id} recortado desde {from}"))?;
         let corte = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
+        corte_nuevo = corte.clone();
 
-        // El replante. En el caso sano queda vacio solo, por patch-id: lo que
-        // la ventana hizo ya subio al panorama, asi que el corte nuevo lo
-        // contiene y git lo deja caer. Nadie tiene que acordarse de propagar
-        // antes de regenerar.
+        // El replante. El caso sano —la ventana propagada entera— ni siquiera
+        // llega aca: lo contesta la ref de arriba. Esto es para la ventana que
+        // subio a medias, y ahi lo ya propagado se cae de a uno.
         let Some((cut, work)) = previo else { return Ok(corte) };
         if work.is_empty() {
             return Ok(corte);
@@ -217,8 +231,29 @@ pub fn open(
         // pregunta contra el arbol que tiene delante, que es lo que importa.
         let shas = git_output(repo, &["rev-list", "--reverse", &format!("{cut}..{branch}")])?;
         for sha in shas.lines() {
+            let subject = git_output(&tmp, &["log", "-1", "--format=%s", sha])?.trim().to_string();
+            let corto = &sha[..7.min(sha.len())];
             match crate::git::cherry_pick_one(&tmp, sha)? {
                 crate::git::Picked::Applied | crate::git::Picked::Empty => {}
+                // Ya esta en el corte, escrito de otra manera. Se deja caer y
+                // se dice: es la diferencia entre un descarte y una perdida.
+                crate::git::Picked::Superseded => eprintln!(
+                    "  dejado caer: {corto} — ya esta en el corte modulo normalizacion"
+                ),
+                // Y si lo unico que choca es el `.sprint.md`, gana el corte:
+                // la planificacion se edita arriba y baja regenerando.
+                crate::git::Picked::Conflict { ref files, .. }
+                    if crate::git::planning_only(files) =>
+                {
+                    eprintln!("  dejado caer: {corto} — la planificacion del sprint es del panorama")
+                }
+                // Y los que el servidor rehace arriba: si chocan es porque el
+                // corte ya los trae hechos. Que la pregunta llegue recien
+                // despues del choque es lo que protege a la ventana adelantada
+                // —si el panorama no los tuviera, el replante aplica limpio.
+                crate::git::Picked::Conflict { .. } if crate::git::redone_above(&subject) => {
+                    eprintln!("  dejado caer: {corto} — el corte ya lo trae rehecho")
+                }
                 crate::git::Picked::Conflict { files, output } => bail!(
                     "el corte nuevo esta, pero un commit de la ventana no se pudo replantar:\n\
                      \x20 {linea}\n\
@@ -259,5 +294,29 @@ pub fn open(
     }
 
     git_output(repo, &["update-ref", &branch, &head])?;
+
+    // Y la contabilidad de la propagacion se mueve con la rama.
+    //
+    // Regenerar reescribe la historia, asi que la ref se queda apuntando a un
+    // commit que ya no es ancestro de nada. `pending` la usa como piso —`log
+    // <ref>..<tip>`— y con el piso afuera de la rama ese rango es **la
+    // ventana entera**: el proximo push re-propagaria todo lo que ya subio.
+    //
+    // No es hipotetico desde que `pull` regenera en cada invocacion.
+    let anotar = if propagada {
+        // Subio entera y el corte la contiene: el tip nuevo esta propagado.
+        Some(head.clone())
+    } else if !corte_nuevo.is_empty() {
+        // Lo que sale del panorama esta propagado por construccion. Lo que
+        // quedo encima es el trabajo que todavia no subio, que es justo lo que
+        // la ref tiene que dejar afuera.
+        Some(corte_nuevo)
+    } else {
+        None
+    };
+    if let Some(hasta) = anotar {
+        git_output(repo, &["update-ref", &crate::git::propagated_ref(&branch), &hasta])?;
+    }
+
     Ok((files, head))
 }

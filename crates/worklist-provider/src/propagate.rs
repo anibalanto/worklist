@@ -15,8 +15,16 @@
 use anyhow::{bail, Result};
 use std::path::Path;
 use worklist_core::git::{
+    normalize_subject, redone_above, rename_subject, sprint_subject,
     cherry_pick_one, cut_commit, git_output, rev_parse, try_git, Picked, ALL_ZEROS, PANORAMA,
 };
+
+/// Donde el servidor anota hasta donde subio una ventana.
+///
+/// Vive en `core` porque el recorte tambien la lee: una ventana propagada
+/// entera no tiene nada que replantar, y eso lo contesta esta ref y no el
+/// patch-id. Se re-exporta desde aca porque es vocabulario de la propagacion.
+pub use worklist_core::git::propagated_ref;
 
 /// Si este repo tiene panorama.
 ///
@@ -27,16 +35,6 @@ pub fn has_panorama(repo: &Path) -> bool {
     rev_parse(repo, PANORAMA).is_some()
 }
 
-/// Donde el servidor anota hasta donde subio una ventana.
-///
-/// Va en `refs/worklist/**` y no en una rama: es contabilidad del servidor, no
-/// contenido. Deducirlo comparando arboles seria preguntar *"este cambio ya
-/// esta?"* sobre el panorama entero en cada push, y contestarlo mal en cuanto
-/// dos ventanas tocaran lo mismo.
-pub fn propagated_ref(refname: &str) -> String {
-    let short = refname.strip_prefix("refs/heads/").unwrap_or(refname);
-    format!("refs/worklist/propagated/{short}")
-}
 
 /// Que se hizo con cada commit de la ventana.
 #[derive(Debug)]
@@ -45,6 +43,10 @@ pub enum Step {
     Picked { sha: String, subject: String },
     /// El commit no aportaba nada nuevo: el panorama ya lo tenia.
     Empty { sha: String, subject: String },
+    /// El panorama ya lo dice, **escrito de otra manera**: choca en bytes y
+    /// coincide en forma canonica, porque arriba guarda la vuelta del
+    /// round-trip y el commit guarda lo que se tipeo.
+    Superseded { sha: String, subject: String },
     /// Un renombre, **rehecho** sobre el arbol del panorama.
     Renamed { slug: String, key: String, rewritten: usize },
     /// Un renombre que el panorama ya tenia hecho: no queda nada que rehacer.
@@ -81,51 +83,8 @@ pub struct Propagated {
     pub panorama_new: String,
 }
 
-/// `rename <slug> -> <clave>` o `rename <slug> -> <clave> (N refs)`.
-fn rename_subject(subject: &str) -> Option<(String, String)> {
-    let rest = subject.strip_prefix("rename ")?;
-    let (slug, rest) = rest.split_once(" -> ")?;
-    let key = rest.split(' ').next()?;
-    if slug.is_empty() || key.is_empty() {
-        return None;
-    }
-    Some((slug.to_string(), key.to_string()))
-}
 
-/// La clave de un `normalize: <clave>`, que tampoco se copia.
-///
-/// La pasada 2 escribe la forma canonica **traduciendo los links a otros
-/// items**, y esa traduccion lee los nombres del arbol donde corre. Asi que el
-/// texto que deja es el renombre parcial de la ventana, congelado como
-/// contenido: cherry-pickearlo vuelve a meter lo que el renombre rehecho
-/// acababa de arreglar. Ver `concepts/propagation.md`.
-fn normalize_subject(subject: &str) -> Option<String> {
-    let key = subject.strip_prefix("normalize: ")?.trim();
-    if key.is_empty() || key.contains(' ') {
-        return None;
-    }
-    Some(key.to_string())
-}
 
-/// El id y la clave de un `sprint: <id> -> <clave>`, que tampoco se copia.
-///
-/// La pasada 5 escribe **un campo** —`key`— sobre el `.sprint.md` de la
-/// ventana. Copiarlo como parche arrastra las lineas de contexto, y el
-/// `.sprint.md` del panorama es el que se planifica: ahi se cierra el sprint y
-/// se mueven los items. Asi que el contexto difiere por trabajo legitimo, y el
-/// parche choca sobre algo que no estaba tratando de cambiar.
-///
-/// **Rehacerlo escribe `key` y nada mas**, que es lo unico que la ventana sabe
-/// y el panorama no. `status` e `items` no viajan hacia arriba: la
-/// planificacion se edita en el panorama. Ver `concepts/propagation.md`.
-fn sprint_subject(subject: &str) -> Option<(String, String)> {
-    let rest = subject.strip_prefix("sprint: ")?;
-    let (id, key) = rest.split_once(" -> ")?;
-    if id.is_empty() || key.is_empty() || id.contains(' ') || key.contains(' ') {
-        return None;
-    }
-    Some((id.to_string(), key.to_string()))
-}
 
 /// Los commits que faltan subir, en orden, con su asunto.
 pub fn pending(repo: &Path, refname: &str, tip: &str) -> Result<(String, Vec<(String, String)>)> {
@@ -167,10 +126,7 @@ pub fn would_conflict(repo: &Path, refname: &str, tip: &str) -> Result<Verdict> 
     let mut sobre = panorama;
     for (sha, subject) in &commits {
         // Los que se rehacen no se prueban: no hay parche que pueda no aplicar.
-        if rename_subject(subject).is_some()
-            || normalize_subject(subject).is_some()
-            || sprint_subject(subject).is_some()
-        {
+        if redone_above(subject) {
             continue;
         }
         let base = format!("{sha}^");
@@ -337,6 +293,9 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
                 }
                 Picked::Empty => {
                     steps.push(Step::Empty { sha: sha.clone(), subject: subject.clone() })
+                }
+                Picked::Superseded => {
+                    steps.push(Step::Superseded { sha: sha.clone(), subject: subject.clone() })
                 }
                 Picked::Conflict { files, output } => bail!(
                     "el panorama no recibe {} {subject}\n\

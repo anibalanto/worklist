@@ -15,8 +15,14 @@
 //! donde cortar. Lo que le queda al cliente para tener su ventana es `git
 //! fetch` y un worktree.
 //!
-//! Lo que falta ya esta decidido y sin implementar: `sync`, `view add`, `new`,
+//! **`pull` es el tercero y no escribe una propuesta**: escribe la rama local y
+//! el worktree, que es la otra cosa que el cliente posee. Su paso 1 le pide el
+//! corte al servidor —que es de quien es— y los pasos 2 y 3 son suyos.
+//!
+//! Lo que falta ya esta decidido y sin implementar: `view add`, `new`,
 //! `status`, `is-secure`.
+
+mod pull;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -43,6 +49,19 @@ enum Cmd {
         /// colgando de la raiz, que el formato admite.
         #[arg(long)]
         force: bool,
+    },
+    /// Pone una vista al dia: trae el corte de hoy y replanta encima lo que no
+    /// se empujo. Ver `commands/pull.md`.
+    Pull {
+        /// Que vista. Por defecto, aquella en la que se esta parado.
+        vista: Option<String>,
+        /// Todas las vistas del clon. **Solo bajada**: son operaciones
+        /// independientes y no hay atomicidad que administrar entre ellas.
+        #[arg(long)]
+        all: bool,
+        /// Dice que traeria y que replantaria, sin mover ninguna rama.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -100,6 +119,7 @@ fn main() -> Result<()> {
             println!("hint: se deshace con git revert");
             Ok(())
         }
+        Cmd::Pull { vista, all, dry_run } => pull::run(vista, all, dry_run),
     }
 }
 

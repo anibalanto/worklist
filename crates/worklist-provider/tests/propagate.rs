@@ -23,16 +23,6 @@ fn rev(repo: &Path, refname: &str) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-fn existe(repo: &Path, refname: &str) -> bool {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--verify", "-q", refname])
-        .output()
-        .unwrap()
-        .status
-        .success()
-}
 
 /// Un item con cuerpo propio, para poder citar a otro en la prosa.
 fn item_con(repo: &Path, name: &str, parent: Option<&str>, cuerpo: &str) {
@@ -185,9 +175,15 @@ fn un_choque_no_mueve_el_panorama_ni_la_marca() {
     let msg = format!("{e:#}");
     assert!(msg.contains("@o.task.md"), "el mensaje dice en que archivo choco: {msg}");
     assert_eq!(rev(r, "insecure/all"), panorama, "el panorama no avanza a medias");
-    assert!(
-        !existe(r, &propagated_ref("refs/heads/secure/sprint/1")),
-        "la marca no se mueve si el panorama no recibio"
+    // La marca la deja el recorte apuntando al corte, que es *"nada subio
+    // todavia"* dicho explicitamente en vez de por ausencia. Lo que importa es
+    // que **no se movio**: sigue abajo del trabajo, no en el tip.
+    let marca = rev(r, &propagated_ref("refs/heads/secure/sprint/1"));
+    assert_ne!(marca, tip, "la marca no se mueve si el panorama no recibio");
+    assert_eq!(
+        marca,
+        worklist_core::git::cut_commit(r, "refs/heads/secure/sprint/1", "insecure/all").unwrap(),
+        "y sigue en el corte, que es de donde `pending` arranca"
     );
 }
 

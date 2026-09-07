@@ -110,3 +110,192 @@ fn el_replante_queda_vacio_si_el_trabajo_ya_subio() {
     .unwrap();
     assert!(contenido.contains("editado"), "y sin embargo el trabajo esta: {contenido}");
 }
+
+/// Y el otro caso en que el replante no aporta nada, que **no** lo resuelve el
+/// patch-id: el panorama guarda la vuelta del round-trip y el commit de la
+/// ventana guarda lo que se tipeo, asi que chocan en bytes y dicen lo mismo.
+///
+/// Antes de esto el error culpaba al `items`, que no tenia nada que ver — un
+/// diagnostico falso es peor que ninguno. Ver `commands/pull.md` seccion "El
+/// paso 3 deja caer lo que ya fue superado".
+#[test]
+fn un_commit_ya_superado_por_la_normalizacion_se_deja_caer() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let frontmatter = "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: ACC-2\n---\n";
+    let tipeado = format!("{frontmatter}\nEsta task pedia *\"un nombre bajo 20\"* elegido a mano.\n");
+    let normalizado = worklist_core::body::canonical(&tipeado).unwrap();
+    // Si el conversor no cambiara nada, el test pasaria sin ejercitar nada.
+    assert_ne!(tipeado, normalizado, "el caso que esto prueba necesita que difieran en bytes");
+
+    // La ventana escribe lo que se tipeo.
+    let wt = r.join("w");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
+    std::fs::write(wt.join("ACC-3.task.md"), &tipeado).unwrap();
+    run(&wt, &["commit", "-aqm", "edito ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    // Y el panorama termina con la vuelta, que es lo que `normalize:` rehace
+    // arriba. Se escribe a mano para aislar el caso del resto de la propagacion.
+    let pan = r.join("p");
+    run(&r, &["worktree", "add", "-q", pan.to_str().unwrap(), "insecure/all"]);
+    std::fs::write(pan.join("ACC-3.task.md"), &normalizado).unwrap();
+    run(&pan, &["commit", "-aqm", "normalize: ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", pan.to_str().unwrap()]);
+
+    // Sin descontar la normalizacion, esto choca y pide `--force`.
+    worklist_core::window::open(&r, "10", "insecure/all", false, false)
+        .expect("un commit superado no es un conflicto");
+
+    let contenido = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["show", "refs/heads/secure/sprint/10:ACC-3.task.md"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    // Gana la vigente, que es la del panorama: no hay dos versiones que
+    // reconciliar, hay una superada y una vigente.
+    assert_eq!(contenido, normalizado, "quedo la vuelta del round-trip");
+}
+
+/// Y la respuesta que hace innecesarias a las tres: **si la ventana esta
+/// propagada entera, no hay nada que replantar**, y el servidor lo tiene
+/// anotado en una ref.
+///
+/// El caso que lo obliga es una ventana larga: arriba el cuerpo quedo guardado
+/// en su forma canonica, asi que el patch-id no reconoce ni uno solo de sus
+/// commits y el replante los va chocando de a uno. Preguntarle a la ref
+/// contesta por construccion lo que git tendria que redescubrir.
+#[test]
+fn una_ventana_propagada_entera_no_replanta_nada() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let wt = r.join("w");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
+    std::fs::write(wt.join("ACC-3.task.md"), "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: ACC-2\n---\n\neditado\n").unwrap();
+    run(&wt, &["commit", "-aqm", "edito ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    let tip = head_de(&r, "refs/heads/secure/sprint/10");
+    worklist_provider::propagate::propagate(&r, "refs/heads/secure/sprint/10", &tip, "https://ejemplo.atlassian.net", false)
+        .unwrap()
+        .unwrap();
+
+    // Y encima el panorama sigue: el archivo queda distinto en bytes de lo que
+    // la ventana commiteo, que es lo que rompe el patch-id.
+    let pan = r.join("p");
+    run(&r, &["worktree", "add", "-q", pan.to_str().unwrap(), "insecure/all"]);
+    std::fs::write(pan.join("ACC-3.task.md"), "---\ntitle: x\nstatus: done\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-08T00:00:00Z\nparent: ACC-2\n---\n\neditado, y algo mas\n").unwrap();
+    run(&pan, &["commit", "-aqm", "sigue ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", pan.to_str().unwrap()]);
+
+    worklist_core::window::open(&r, "10", "insecure/all", false, false)
+        .expect("propagada entera, no hay nada que replantar");
+
+    let contenido = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["show", "refs/heads/secure/sprint/10:ACC-3.task.md"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(contenido.contains("editado, y algo mas"), "quedo lo ultimo del panorama");
+}
+
+/// Y la contabilidad se mueve con la rama.
+///
+/// Regenerar reescribe la historia, asi que la marca se quedaria apuntando a un
+/// commit que ya no es ancestro de nada. `pending` la usa como piso, y con el
+/// piso afuera de la rama ese rango es la ventana entera: el proximo push
+/// re-propagaria todo lo que ya subio.
+#[test]
+fn regenerar_deja_la_marca_adentro_de_la_rama() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let wt = r.join("w");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
+    std::fs::write(wt.join("ACC-3.task.md"), "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: ACC-2\n---\n\neditado\n").unwrap();
+    run(&wt, &["commit", "-aqm", "edito ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    let tip = head_de(&r, "refs/heads/secure/sprint/10");
+    worklist_provider::propagate::propagate(&r, "refs/heads/secure/sprint/10", &tip, "https://ejemplo.atlassian.net", false)
+        .unwrap()
+        .unwrap();
+
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let nuevo = head_de(&r, "refs/heads/secure/sprint/10");
+    let marca = head_de(&r, &worklist_provider::propagate::propagated_ref("refs/heads/secure/sprint/10"));
+    let es_ancestro = Command::new("git")
+        .arg("-C")
+        .arg(&r)
+        .args(["merge-base", "--is-ancestor", &marca, &nuevo])
+        .status()
+        .unwrap()
+        .success();
+    assert!(es_ancestro, "la marca quedo afuera de la rama regenerada: {marca} / {nuevo}");
+
+    // Y no queda nada por subir: lo que la ventana hizo ya esta arriba.
+    let (_, pendientes) =
+        worklist_provider::propagate::pending(&r, "refs/heads/secure/sprint/10", &nuevo).unwrap();
+    assert!(pendientes.is_empty(), "re-propagaria {} commit(s) ya subidos", pendientes.len());
+}
+
+/// El tercer motivo por el que un replante no aporta nada: el `.sprint.md`.
+///
+/// `status` e `items` se editan **arriba** y bajan regenerando, asi que el
+/// commit de la ventana arrastra como contexto un `items` que ya quedo viejo y
+/// choca sobre algo que no estaba tratando de cambiar. Gana el corte.
+#[test]
+fn un_conflicto_solo_en_el_sprint_md_lo_gana_el_corte() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    // La ventana arranca el sprint: `open -> in-progress`, y nada mas.
+    let wt = r.join("w");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
+    let en_curso = std::fs::read_to_string(wt.join("_sprints/10.sprint.md"))
+        .unwrap()
+        .replace("status: in-progress", "status: open")
+        .replace("updated_at: 2026-09-04", "updated_at: 2026-09-05");
+    std::fs::write(wt.join("_sprints/10.sprint.md"), &en_curso).unwrap();
+    run(&wt, &["commit", "-aqm", "el sprint 10 arranca"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    // Y arriba se replanifica: el `items` gana un item. Es el contexto que
+    // deriva, y es trabajo legitimo.
+    let pan = r.join("p");
+    run(&r, &["worktree", "add", "-q", pan.to_str().unwrap(), "insecure/all"]);
+    let replanificado = std::fs::read_to_string(pan.join("_sprints/10.sprint.md"))
+        .unwrap()
+        .replace("items: [ACC-2]", "items: [ACC-2, ACC-7]");
+    std::fs::write(pan.join("_sprints/10.sprint.md"), &replanificado).unwrap();
+    run(&pan, &["commit", "-aqm", "el sprint 10 gana un item"]);
+    run(&r, &["worktree", "remove", "--force", pan.to_str().unwrap()]);
+
+    worklist_core::window::open(&r, "10", "insecure/all", false, false)
+        .expect("un choque solo en el `.sprint.md` no es un conflicto que frene el recorte");
+
+    let contenido = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["show", "refs/heads/secure/sprint/10:_sprints/10.sprint.md"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(contenido.contains("items: [ACC-2, ACC-7]"), "gano la planificacion de arriba");
+}

@@ -105,6 +105,25 @@ pub fn links_in(body: &str, base: &str, repo: &std::path::Path) -> String {
     .to_string()
 }
 
+/// La forma canonica del archivo, sin pasar por el borde del proveedor.
+///
+/// Es `round_trip` sin la traduccion de links: no necesita ni `base` ni el
+/// arbol, asi que el cliente la puede calcular sin saber nada del proveedor.
+/// Sirve para **comparar**, no para guardar — lo que se guarda es la vuelta
+/// entera, que ademas traduce los links.
+///
+/// Existe porque el panorama guarda la vuelta del round-trip y el commit del
+/// cliente guarda lo que se tipeo, asi que dos textos que dicen lo mismo
+/// difieren en bytes. Comparar en forma canonica es lo que distingue *ya esta,
+/// escrito de otra manera* de *alguien escribio otra cosa*. Ver
+/// `commands/pull.md` seccion "El paso 3 deja caer lo que ya fue superado".
+pub fn canonical(text: &str) -> Result<String> {
+    let (frontmatter, body) = split_frontmatter(text);
+    // El frontmatter vuelve intacto: no es markdown, y un `updated_at` distinto
+    // es una diferencia de verdad y no de formato.
+    Ok(format!("{frontmatter}{}", adf_to_body(&body_to_adf(body)?)?))
+}
+
 /// Toma el archivo entero, devuelve `(adf_para_el_proveedor, archivo_a_guardar)`.
 ///
 /// El frontmatter vuelve intacto, byte a byte: se separa antes de convertir y

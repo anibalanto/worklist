@@ -83,6 +83,9 @@ pub enum Picked {
     Applied,
     /// El arbol ya lo tenia: la re-aplicacion no aporta nada.
     Empty,
+    /// El arbol ya lo dice, **escrito de otra manera**: el commit choca en
+    /// bytes y coincide en forma canonica. Se deja caer igual que `Empty`.
+    Superseded,
     Conflict { files: Vec<String>, output: String },
 }
 
@@ -90,6 +93,12 @@ pub enum Picked {
 ///
 /// La diferencia se lee del indice y no del codigo de salida: git falla en los
 /// dos casos. Si no quedo nada en conflicto, el commit ya estaba aplicado.
+///
+/// Y antes de llamarlo conflicto se descuenta la normalizacion: el panorama
+/// guarda la vuelta del round-trip y el commit del cliente guarda lo que se
+/// tipeo, asi que un commit ya superado choca en bytes sin decir nada. Ver
+/// `concepts/propagation.md` seccion "Salvo que primero hay que descontar la
+/// normalizacion".
 pub fn cherry_pick_one(tmp: &Path, sha: &str) -> Result<Picked> {
     let (ok, output) = try_git(tmp, &["cherry-pick", "--allow-empty", sha])?;
     if ok {
@@ -100,7 +109,126 @@ pub fn cherry_pick_one(tmp: &Path, sha: &str) -> Result<Picked> {
         let _ = try_git(tmp, &["cherry-pick", "--skip"]);
         return Ok(Picked::Empty);
     }
-    let files = unmerged.lines().map(|s| s.to_string()).collect();
+    let files: Vec<String> = unmerged.lines().map(|s| s.to_string()).collect();
     let _ = try_git(tmp, &["cherry-pick", "--abort"]);
+    if superseded(tmp, sha, &files) {
+        return Ok(Picked::Superseded);
+    }
     Ok(Picked::Conflict { files, output })
+}
+
+/// Donde el servidor anota hasta donde subio una ventana.
+///
+/// Va en `refs/worklist/**` y no en una rama: es contabilidad del servidor, no
+/// contenido. Deducirlo comparando arboles seria preguntar *"este cambio ya
+/// esta?"* sobre el panorama entero en cada push, y contestarlo mal en cuanto
+/// dos ventanas tocaran lo mismo.
+pub fn propagated_ref(refname: &str) -> String {
+    let short = refname.strip_prefix("refs/heads/").unwrap_or(refname);
+    format!("refs/worklist/propagated/{short}")
+}
+
+/// `rename <slug> -> <clave>` o `rename <slug> -> <clave> (N refs)`.
+pub fn rename_subject(subject: &str) -> Option<(String, String)> {
+    let rest = subject.strip_prefix("rename ")?;
+    let (slug, rest) = rest.split_once(" -> ")?;
+    let key = rest.split(' ').next()?;
+    if slug.is_empty() || key.is_empty() {
+        return None;
+    }
+    Some((slug.to_string(), key.to_string()))
+}
+
+/// La clave de un `normalize: <clave>`, que tampoco se copia.
+///
+/// La pasada 2 escribe la forma canonica **traduciendo los links a otros
+/// items**, y esa traduccion lee los nombres del arbol donde corre. Asi que el
+/// texto que deja es el renombre parcial de la ventana, congelado como
+/// contenido: cherry-pickearlo vuelve a meter lo que el renombre rehecho
+/// acababa de arreglar. Ver `concepts/propagation.md`.
+pub fn normalize_subject(subject: &str) -> Option<String> {
+    let key = subject.strip_prefix("normalize: ")?.trim();
+    if key.is_empty() || key.contains(' ') {
+        return None;
+    }
+    Some(key.to_string())
+}
+
+/// El id y la clave de un `sprint: <id> -> <clave>`, que tampoco se copia.
+///
+/// La pasada 5 escribe **un campo** —`key`— sobre el `.sprint.md` de la
+/// ventana. Copiarlo como parche arrastra las lineas de contexto, y el
+/// `.sprint.md` del panorama es el que se planifica: ahi se cierra el sprint y
+/// se mueven los items. Asi que el contexto difiere por trabajo legitimo, y el
+/// parche choca sobre algo que no estaba tratando de cambiar.
+///
+/// **Rehacerlo escribe `key` y nada mas**, que es lo unico que la ventana sabe
+/// y el panorama no. `status` e `items` no viajan hacia arriba: la
+/// planificacion se edita en el panorama. Ver `concepts/propagation.md`.
+pub fn sprint_subject(subject: &str) -> Option<(String, String)> {
+    let rest = subject.strip_prefix("sprint: ")?;
+    let (id, key) = rest.split_once(" -> ")?;
+    if id.is_empty() || key.is_empty() || id.contains(' ') || key.contains(' ') {
+        return None;
+    }
+    Some((id.to_string(), key.to_string()))
+}
+
+/// Si el servidor **rehace** este commit arriba en vez de copiarlo.
+///
+/// Son los tres que dependen del arbol que los vio: el renombre, la
+/// normalizacion y la clave del sprint. Subiendo se recalculan sobre el
+/// panorama; **bajando eso quiere decir que el corte ya los trae hechos**, asi
+/// que replantarlos no puede aportar nada.
+///
+/// Se pregunta recien cuando el cherry-pick choco, y no antes: si la ventana
+/// quedo adelantada —la propagacion se cayo por la mitad— el panorama todavia
+/// no los tiene, el replante aplica limpio y no se pierde nada.
+pub fn redone_above(subject: &str) -> bool {
+    rename_subject(subject).is_some()
+        || normalize_subject(subject).is_some()
+        || sprint_subject(subject).is_some()
+}
+
+/// Si lo que choca es **solo** el `.sprint.md`.
+///
+/// Al replantar, eso se resuelve a favor del corte: la planificacion —`status`
+/// e `items`— se edita en el panorama y baja regenerando, asi que el commit de
+/// la ventana arrastra como contexto un `items` que ya quedo viejo y choca
+/// sobre algo que no estaba tratando de cambiar. Es la misma asimetria que
+/// hace que la clave del sprint se rehaga en vez de copiarse, leida para el
+/// otro lado. Ver `concepts/propagation.md`.
+///
+/// **Es de la bajada y no del cherry-pick**: hacia arriba las ediciones que la
+/// ventana le hace al `.sprint.md` si viajan, asi que esto no puede vivir
+/// adentro de `cherry_pick_one`, que las dos direcciones comparten.
+pub fn planning_only(files: &[String]) -> bool {
+    !files.is_empty() && files.iter().all(|f| f.starts_with("_sprints/"))
+}
+
+/// Si lo que el commit dice en los archivos que chocan ya esta en el arbol,
+/// **modulo normalizacion**.
+///
+/// Se pregunta sobre los archivos en conflicto y no sobre los que el commit
+/// toca: los demas ya los resolvio el merge. Y se pregunta con `git show`, no
+/// leyendo el worktree, porque el cherry-pick se acaba de abortar.
+///
+/// Se contesta en una pasada porque la conversion converge: normalizar las dos
+/// puntas y comparar da si o no, sin iterar.
+fn superseded(tmp: &Path, sha: &str, files: &[String]) -> bool {
+    files.iter().all(|file| {
+        let mine = git_output(tmp, &["show", &format!("{sha}:{file}")]);
+        let theirs = git_output(tmp, &["show", &format!("HEAD:{file}")]);
+        let (Ok(mio), Ok(suyo)) = (mine, theirs) else {
+            // Uno de los dos no existe: es un alta o una baja, y eso no es
+            // normalizacion. Que lo decida el conflicto.
+            return false;
+        };
+        match (crate::body::canonical(&mio), crate::body::canonical(&suyo)) {
+            (Ok(a), Ok(b)) => a == b,
+            // Un archivo que el conversor no puede leer no es uno que este
+            // superado: no se puede afirmar, asi que no se afirma.
+            _ => false,
+        }
+    })
 }

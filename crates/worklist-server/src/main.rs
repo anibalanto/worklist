@@ -876,6 +876,9 @@ fn report_propagated(p: &worklist_provider::propagate::Propagated, dry_run: bool
             Step::Empty { sha, subject } => {
                 println!("  {} {subject}  (el panorama ya lo tenia)", short(sha))
             }
+            Step::Superseded { sha, subject } => {
+                println!("  {} {subject}  (el panorama ya lo dice, normalizado)", short(sha))
+            }
             // El renombre no se copia: se rehace, y su reescritura es la del
             // panorama entero, no la de los 19 archivos de la ventana.
             Step::Renamed { slug, key, rewritten } => {
