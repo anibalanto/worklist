@@ -5,8 +5,8 @@ endpoint:
     accepted:
     - agree:
       - test
-      link: capture 37576cd49a419595fea3ccabc1454e47
-      hash: 5e9993e110e9b38713f70e21422d7f4ab8f91f9fafefaa471399f26b572d0a43
+      link: capture bb905e88c510cb1d0aeb4412307ad126
+      hash: e5bce4f0e503150865567ba26a8478571be813f63d3e9d525ecd3a749048534d
   1:
     link: capture 6491fb38aa0bf8559bd7bc8acc9789aa
     n:
@@ -16,10 +16,10 @@ endpoint:
     - agree:
       - test
       link: capture 6491fb38aa0bf8559bd7bc8acc9789aa
-      hash: c56f14b6bfa514b9674b4fe78cdc9cb4a490c0bfa783940d5594afd557a7eb13
-      hash_ast: 6f6db0657bfa2923f9633b8e301551c809801d25708bf453650e63938ba454c8
+      hash: 1a6297ef6c805bf4b8b66f18ea17c7287793c5cc7f0f1fbd44fe1bc5f5e2abc1
+      hash_ast: 7b096582c0bdc310627d4b7d379baeaa3ef4187aa29c9bd6740b4852c1864bf1
       n:
         1:
           link: capture b08500ef44f53ed3c12fb0412c8884fc
-          hash: bf00779b9deac5165313ff63095c43de86597e31a359ee3b844be56f922ccf1f
-          hash_ast: c159af4ad4111cfec2abc4f27b51d3b48d84271e87f6989a54773fa9101b8854
+          hash: 95402f633093c04fa71192ccc0ed6cb6c9cd94628408228877e0e846d287d243
+          hash_ast: 4c6a078eca99c71ca7609d321dcd498cf55aa91117fb866fe11b7192594e08b9
