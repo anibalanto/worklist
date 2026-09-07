@@ -14,7 +14,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use worklist_core::git::{cherry_pick_one, cut_commit, git_output, rev_parse, try_git, Picked};
+use worklist_core::git::{cherry_pick_one, git_output, rev_parse, try_git, Picked};
 
 /// Una vista del clon: su worktree y la rama que tiene checkouteada.
 pub struct View {
@@ -187,7 +187,14 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
             sucio.trim()
         );
     }
-    if tip == antes {
+    // Estar **adelantado** no es estar divergido. Si mi HEAD ya contiene la
+    // punta del servidor, mi trabajo ya esta donde tiene que estar y no hay
+    // nada que replantar — cherry-pickearlo sobre su propio padre lo dejaria
+    // igual con otro sha, que es la misma reescritura por nada que el recorte
+    // dejo de hacer.
+    let (contiene, _) =
+        try_git(&v.path, &["merge-base", "--is-ancestor", &tip, &antes])?;
+    if contiene {
         return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new() });
     }
     // Nada sin empujar: el corte nuevo trae todo mi trabajo, y replantarlo
@@ -198,9 +205,13 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
         return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new() });
     }
 
-    let cut = cut_commit(&v.path, &antes, &srv_ref)?;
-    let mios = git_output(&v.path, &["log", "--oneline", &format!("{cut}..{antes}")])?;
-    let shas = git_output(&v.path, &["rev-list", "--reverse", &format!("{cut}..{antes}")])?;
+    // Lo mio es lo que la punta del servidor no tiene, y eso es el rango y
+    // nada mas. **No se busca el corte para esto**: el corte se busca contra el
+    // panorama, que de este lado no esta — y cuando el recorte es idempotente
+    // la punta del servidor *es* el corte, con lo que buscarlo ahi encuentra mi
+    // propio trabajo y no un `window:`.
+    let mios = git_output(&v.path, &["log", "--oneline", &format!("{tip}..{antes}")])?;
+    let shas = git_output(&v.path, &["rev-list", "--reverse", &format!("{tip}..{antes}")])?;
 
     git_output(&v.path, &["reset", "--hard", "--quiet", &tip])?;
 
@@ -208,6 +219,13 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     let mut caidos = Vec::new();
     for sha in shas.lines() {
         let subject = git_output(&v.path, &["log", "-1", "--format=%s", sha])?.trim().to_string();
+        // El corte **nunca** se replanta: es un commit que borra lo que el
+        // recorte dejo afuera, y re-aplicarlo sobre un panorama que crecio
+        // no menciona lo nuevo, asi que lo nuevo entra. El de hoy ya vino en
+        // el `fetch`; el mio, si el servidor recorto distinto, se cae aca.
+        if subject.starts_with("window: ") {
+            continue;
+        }
         let linea = || {
             mios.lines()
                 .find(|l| l.starts_with(&sha[..7.min(sha.len())]))

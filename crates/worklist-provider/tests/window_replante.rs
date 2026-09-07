@@ -211,6 +211,102 @@ fn una_ventana_propagada_entera_no_replanta_nada() {
     assert!(contenido.contains("editado, y algo mas"), "quedo lo ultimo del panorama");
 }
 
+/// Recortar es idempotente: si no hay nada nuevo que recortar, la rama no se
+/// mueve.
+///
+/// No es una optimizacion. Un commit lleva la hora adentro del hash, asi que
+/// recortar igual reescribe la rama **para decir lo que ya decia**, y todo el
+/// que la tenga clonada queda sin poder fast-forwardear por nada. Desde que
+/// `pull` recorta en cada invocacion, eso pasaria todo el tiempo.
+#[test]
+fn recortar_sin_nada_nuevo_no_mueve_la_rama() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    let primero = head_de(&r, "refs/heads/secure/sprint/10");
+
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    assert_eq!(head_de(&r, "refs/heads/secure/sprint/10"), primero, "recorto de nuevo por nada");
+}
+
+/// Y sigue siendo idempotente cuando el panorama se movio **para otra
+/// ventana**: cualquier push a cualquiera de las otras lo adelanta, y esta no
+/// tiene por que enterarse.
+#[test]
+fn el_panorama_que_avanza_por_otra_ventana_no_mueve_esta() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    let primero = head_de(&r, "refs/heads/secure/sprint/10");
+
+    // Se toca un item que esta ventana no lleva: `ACC-7` quedo afuera.
+    let pan = r.join("p");
+    run(&r, &["worktree", "add", "-q", pan.to_str().unwrap(), "insecure/all"]);
+    std::fs::write(pan.join("ACC-7.task.md"), "---\ntitle: otro\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-08T00:00:00Z\n---\n\nde otra ventana\n").unwrap();
+    run(&pan, &["commit", "-aqm", "edito ACC-7, que no es de la 10"]);
+    run(&r, &["worktree", "remove", "--force", pan.to_str().unwrap()]);
+
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    assert_eq!(
+        head_de(&r, "refs/heads/secure/sprint/10"),
+        primero,
+        "el panorama avanzo, pero no para esta ventana"
+    );
+}
+
+/// Y cuando si cambia para esta ventana, recorta.
+#[test]
+fn un_cambio_en_un_item_de_la_ventana_si_recorta() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    let primero = head_de(&r, "refs/heads/secure/sprint/10");
+
+    let pan = r.join("p");
+    run(&r, &["worktree", "add", "-q", pan.to_str().unwrap(), "insecure/all"]);
+    std::fs::write(pan.join("ACC-3.task.md"), "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-08T00:00:00Z\nparent: ACC-2\n---\n\nesto si es de la 10\n").unwrap();
+    run(&pan, &["commit", "-aqm", "edito ACC-3, que si es de la 10"]);
+    run(&r, &["worktree", "remove", "--force", pan.to_str().unwrap()]);
+
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    let segundo = head_de(&r, "refs/heads/secure/sprint/10");
+    assert_ne!(segundo, primero, "cambio algo suyo y no lo trajo");
+    let contenido = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&r)
+            .args(["show", "refs/heads/secure/sprint/10:ACC-3.task.md"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(contenido.contains("esto si es de la 10"));
+}
+
+/// Y el replante tiene la misma propiedad por su lado: un commit que ya esta
+/// encima de la punta no se cherry-pickea sobre su propio padre.
+///
+/// Estar **adelantado** no es estar divergido. Cherry-pickearlo lo dejaria
+/// igual con otro sha, que es la misma reescritura por nada que el recorte
+/// dejo de hacer.
+#[test]
+fn el_trabajo_que_ya_esta_encima_del_corte_no_se_replanta() {
+    let (_dir, r) = arbol_aislado();
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+
+    let wt = r.join("w");
+    run(&r, &["worktree", "add", "-q", wt.to_str().unwrap(), "secure/sprint/10"]);
+    std::fs::write(wt.join("ACC-3.task.md"), "---\ntitle: x\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\nparent: ACC-2\n---\n\nsin empujar\n").unwrap();
+    run(&wt, &["commit", "-aqm", "edito ACC-3"]);
+    run(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    let con_trabajo = head_de(&r, "refs/heads/secure/sprint/10");
+    worklist_core::window::open(&r, "10", "insecure/all", false, false).unwrap();
+    assert_eq!(
+        head_de(&r, "refs/heads/secure/sprint/10"),
+        con_trabajo,
+        "el trabajo sin propagar se replanto sobre su propio padre"
+    );
+}
+
 /// Y la contabilidad se mueve con la rama.
 ///
 /// Regenerar reescribe la historia, asi que la marca se quedaria apuntando a un

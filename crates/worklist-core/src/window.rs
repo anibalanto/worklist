@@ -144,6 +144,19 @@ fn would_discard(repo: &Path, branch: &str, head: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// El corte que la ventana tiene hoy, si tiene uno.
+fn cut_actual(repo: &Path, branch: &str, from: &str) -> Option<String> {
+    if git_output(repo, &["rev-parse", "--verify", "--quiet", branch]).is_err() {
+        return None;
+    }
+    crate::git::cut_commit(repo, branch, from).ok()
+}
+
+/// El arbol de un commit: lo que dice, sin cuando ni sobre que se dijo.
+fn tree_of(repo: &Path, commit: &str) -> Option<String> {
+    git_output(repo, &["rev-parse", &format!("{commit}^{{tree}}")]).ok().map(|s| s.trim().to_string())
+}
+
 /// Lo que la ventana tiene **encima de su corte**: su trabajo, sin el recorte.
 fn work_above_cut(repo: &Path, branch: &str, from: &str) -> Result<Option<(String, Vec<String>)>> {
     if git_output(repo, &["rev-parse", "--verify", "--quiet", branch]).is_err() {
@@ -181,6 +194,25 @@ pub fn open(
              worktree primero."
         );
     }
+    // **El corte es derivado, asi que recortar de nuevo sobre lo mismo no
+    // produce nada.** Y no es una optimizacion: recortar escribe un commit, y
+    // un commit lleva la hora adentro del hash, asi que hacerlo igual
+    // reescribe la rama para decir lo que ya decia. Todo el que la tenga
+    // clonada queda sin poder fast-forwardear, por nada.
+    //
+    // Se pregunta en dos pasos, del barato al exacto. El barato: si el
+    // panorama no se movio desde que se hizo el corte, no hay de donde salga
+    // una diferencia — ni el `items`, que vive arriba.
+    let corte_hoy = if force { None } else { cut_actual(repo, &branch, from) };
+    if let Some(ref corte) = corte_hoy {
+        let padre = git_output(repo, &["rev-parse", &format!("{corte}^")]).ok();
+        let panorama = git_output(repo, &["rev-parse", from]).ok();
+        if padre.is_some() && padre == panorama {
+            let head = git_output(repo, &["rev-parse", &branch])?.trim().to_string();
+            return Ok((files, head));
+        }
+    }
+
     // Lo que la ventana tiene encima de su corte: **eso se replanta**, no se
     // descarta. El corte viejo no: es un commit que borra una lista fija de
     // rutas, y re-aplicarlo sobre un panorama que crecio no menciona lo nuevo,
@@ -205,6 +237,9 @@ pub fn open(
     // El corte queda afuera del cierre para poder anotarlo despues: es el
     // punto hasta el cual la rama nueva esta propagada por construccion.
     let mut corte_nuevo = String::new();
+    // Y si el recorte nuevo dice lo mismo que el que ya esta, la rama no se
+    // toca: se devuelve su punta tal cual.
+    let mut sin_cambios = false;
     let result = (|| -> Result<String> {
         let keep: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
         let listing = git_output(&tmp, &["ls-files"])?;
@@ -215,6 +250,19 @@ pub fn open(
             }
         }
         crate::commit_all(&tmp, &format!("window: sprint/{sprint_id} recortado desde {from}"))?;
+
+        // El paso exacto: el panorama se movio, pero puede no haberse movido
+        // **para esta ventana** —cualquier push a cualquiera de las otras lo
+        // adelanta—, y ahi el corte nuevo dice exactamente lo mismo. Se
+        // comparan los arboles, que es lo que el corte significa; el sha no
+        // sirve porque lleva la hora y el padre adentro.
+        if let (Some(corte), false) = (corte_hoy.as_deref(), force) {
+            let nuevo = git_output(&tmp, &["rev-parse", "HEAD^{tree}"])?.trim().to_string();
+            if tree_of(repo, corte).as_deref() == Some(nuevo.as_str()) {
+                sin_cambios = true;
+                return Ok(git_output(repo, &["rev-parse", &branch])?.trim().to_string());
+            }
+        }
         let corte = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
         corte_nuevo = corte.clone();
 
@@ -277,6 +325,11 @@ pub fn open(
 
     let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
     let head = result?;
+    if sin_cambios {
+        // Nada que escribir: ni la rama, ni la marca. Recortar contesto que no
+        // habia nada que recortar, que es una respuesta y no un trabajo.
+        return Ok((files, head));
+    }
 
     // Con `--force` el replante no corrio: lo que la ventana tenia encima se
     // tira, y se dice cuanto. Es una decision explicita, no un efecto.
