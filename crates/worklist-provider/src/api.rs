@@ -85,6 +85,36 @@ impl Api {
             .collect())
     }
 
+    /// Si el proveedor todavia tiene esta clave, **decidido por el codigo**.
+    ///
+    /// Su mensaje dice *"no existe o no tienes permiso para verla"* — una sola
+    /// frase para dos casos que no se parecen en nada. El status si los
+    /// distingue, y de eso depende que un item se saque del arbol.
+    pub fn existe(&self, key: &str) -> Result<crate::provider::Existencia> {
+        let url = format!("{}/rest/api/3/issue/{key}?fields=key", self.base);
+        let Some(creds) = &self.creds else {
+            return Err(Failure::new(Op::Snapshot, Some(key), "sin credencial").into());
+        };
+        let (status, _) = http("GET", &url, &creds.basic_auth(), None)
+            .with_context(|| format!("hablando con {url}"))?;
+        Ok(match status {
+            404 => crate::provider::Existencia::Borrada,
+            403 | 401 => crate::provider::Existencia::SinPermiso,
+            s if (200..300).contains(&s) => crate::provider::Existencia::Si,
+            // Cualquier otra cosa **no es una respuesta**: un 500 no dice que
+            // el item no este, y tratarlo como tal lo borraria por un mal dia
+            // del servidor.
+            s => {
+                return Err(Failure::new(
+                    Op::Snapshot,
+                    Some(key),
+                    format!("preguntando si existe salio {s}, que no es ni si ni no"),
+                )
+                .into())
+            }
+        })
+    }
+
     /// Los status a los que este issue puede ir hoy.
     ///
     /// Es lo que el compare-and-swap compara, porque el mapeo de la

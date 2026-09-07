@@ -253,6 +253,45 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Arma `.metadata/product.yaml` del panorama con los `_sprints/*.sprint.md`
+    /// que haya, y commitea.
+    ///
+    /// Es la migracion de `ACC-304`, y es **mecanica**: el nombre sale del
+    /// titulo entero. Los `.sprint.md` **no se borran todavia**: las pasadas
+    /// que sincronizan sprints los siguen leyendo, y se van con ellas.
+    MigrateProduct {
+        #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
+        refname: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Saca del arbol los items cuya clave el proveedor ya no tiene.
+    ///
+    /// **Es un borrado logico**: el archivo se mueve a `.metadata/removes/`,
+    /// entero. Una ausencia no dice por que; un archivo ahi contesta que era y
+    /// por que se fue, y devolverlo es moverlo de nuevo.
+    ///
+    /// Se decide por el codigo HTTP y **nunca por el mensaje**: el proveedor
+    /// dice "no existe o no tienes permiso para verla" para dos casos que no se
+    /// parecen. Ver `concepts/composition.md`.
+    Removes {
+        /// Sobre que rama. **Por defecto el panorama**, que es donde estan las
+        /// dos cosas que hay que tocar: el archivo del item y el `items` que lo
+        /// nombra. Las ventanas se regeneran.
+        #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
+        refname: String,
+        #[arg(long)]
+        provider_file: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        #[arg(long)]
+        account: Option<String>,
+        /// Dice cuales sacaria, sin mover nada.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Cierra las divergencias de estado que un push ya no puede alcanzar.
     ///
     /// **No es lo mismo que la pasada de estados de `assign-keys`**, y por eso
@@ -448,6 +487,10 @@ fn main() -> Result<()> {
                 account.as_deref(),
                 dry_run,
             )
+        }
+        Cmd::MigrateProduct { refname, dry_run } => cmd_migrate_product(&refname, dry_run),
+        Cmd::Removes { refname, provider_file, project, base, account, dry_run } => {
+            cmd_removes(&refname, provider_file, project, &base, account.as_deref(), dry_run)
         }
         Cmd::CreateOrFind { project, r#type, source, base, account, titulo, dry_run } => {
             cmd_create_or_find(project, r#type, source, &base, account.as_deref(), titulo, dry_run)
@@ -1504,5 +1547,92 @@ fn cmd_absorb(
     if let Some(sha) = out.commit {
         println!("absorb: {refname} <- el proveedor  ({})", &sha[..7.min(sha.len())]);
     }
+    Ok(())
+}
+
+/// Saca del arbol lo que el proveedor ya no tiene.
+fn cmd_removes(
+    refname: &str,
+    provider_file: Option<PathBuf>,
+    project: Option<String>,
+    base: &str,
+    account: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let provider: Box<dyn worklist_provider::provider::Provider> = match (provider_file, project) {
+        (Some(f), None) => Box::new(FileProvider::new(f)),
+        (None, Some(p)) => Box::new(worklist_provider::provider::JiraProvider::new(
+            p,
+            conectar(base, account)?,
+        )),
+        _ => anyhow::bail!("hace falta --provider-file o --project, y no los dos"),
+    };
+    let repo = std::env::current_dir()?;
+    let out = worklist_provider::removes::recolectar(&repo, refname, provider.as_ref(), dry_run)?;
+
+    use worklist_provider::removes::Paso;
+    println!("{refname}: {} clave(s)", out.claves);
+    let mut sin_preguntar = 0;
+    for paso in &out.pasos {
+        match paso {
+            Paso::Sacado { key, de, a } => println!("  {key}  sale del arbol: {de} -> {a}"),
+            // **No se toca**, y se dice: una credencial sin permiso no es un
+            // item borrado, y confundirlos destruye.
+            Paso::SinPermiso { key } => {
+                println!("  {key}  el proveedor no deja verla — no se toca")
+            }
+            Paso::NoSePudoPreguntar { .. } => sin_preguntar += 1,
+        }
+    }
+    if sin_preguntar > 0 {
+        println!("  sin preguntar ({sin_preguntar}): este proveedor no puede contestar si existen");
+    }
+    println!("resumen: {} sacada(s)", out.sacados());
+    if let Some(sha) = out.commit {
+        println!("removes: {refname} ({})", &sha[..7.min(sha.len())]);
+    }
+    Ok(())
+}
+
+/// Arma la composicion del panorama con lo que los `.sprint.md` dicen.
+fn cmd_migrate_product(refname: &str, dry_run: bool) -> Result<()> {
+    let repo = std::env::current_dir()?;
+    let p = worklist_core::product::desde_los_sprint_md(&repo, refname)?;
+    if p.sprints.is_empty() {
+        anyhow::bail!("{refname} no tiene ningun `_sprints/*.sprint.md` de donde migrar");
+    }
+    println!("{refname}: {} sprint(s)", p.sprints.len());
+    for s in &p.sprints {
+        let key = s.key.as_deref().unwrap_or("—");
+        println!("  {:>3}  {:<52} {:<8} key {key}  {} item(s)", s.id, s.name, s.status, s.items.len());
+    }
+    if dry_run {
+        println!("(dry-run: no se escribio nada)");
+        return Ok(());
+    }
+
+    let tmp = repo.join("../.worklist-migrate-product");
+    let _ = std::fs::remove_dir_all(&tmp);
+    worklist_core::git::git_output(
+        &repo,
+        &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), refname],
+    )?;
+    let hecho = (|| -> Result<String> {
+        let dest = tmp.join(worklist_core::product::ARCHIVO);
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        std::fs::write(&dest, p.to_yaml()?)?;
+        worklist_core::commit_all(
+            &tmp,
+            &format!("product: la composicion de los {} sprints", p.sprints.len()),
+        )?;
+        Ok(worklist_core::git::git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
+    })();
+    let _ = worklist_core::git::git_output(
+        &repo,
+        &["worktree", "remove", "--force", tmp.to_str().unwrap()],
+    );
+    let head = hecho?;
+    worklist_core::git::git_output(&repo, &["update-ref", refname, &head])?;
+    println!("{refname} -> {}", &head[..7.min(head.len())]);
     Ok(())
 }

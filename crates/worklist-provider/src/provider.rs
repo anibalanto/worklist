@@ -7,6 +7,19 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Que sabe el proveedor de una clave que no informo.
+///
+/// **Son dos casos que su mensaje no distingue** —*"no existe o no tienes
+/// permiso para verla"*— y que su codigo HTTP si.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Existencia {
+    Si,
+    /// 404. La clave murio del otro lado.
+    Borrada,
+    /// 403. **No se toca**: una credencial sin permiso no es un item borrado.
+    SinPermiso,
+}
+
 pub trait Provider {
     /// Lo que el proveedor tiene **en vivo** para esas claves.
     ///
@@ -14,6 +27,18 @@ pub trait Provider {
     /// el cuerpo, solo sobre lo que un push escribe. Ver `concepts/sync.md`
     /// seccion "Dos alcances, porque son dos promesas".
     fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>>;
+
+    /// Si el proveedor **todavia tiene** esta clave.
+    ///
+    /// `None` es *"este proveedor no lo puede contestar"* — el de prueba no
+    /// tiene con que— y **no es** "no existe": de eso depende que un item se
+    /// saque del arbol, asi que confundirlos destruye.
+    ///
+    /// Ver `concepts/composition.md` seccion "Se decide por el codigo, nunca
+    /// por el mensaje".
+    fn existe(&self, _key: &str) -> Result<Option<Existencia>> {
+        Ok(None)
+    }
 
     /// Los estados a los que el workflow deja mover este issue **hoy**.
     ///
@@ -137,6 +162,10 @@ impl Provider for JiraProvider {
     ///
     /// Su fracaso no se traga: se propaga, y quien llama decide — no poder
     /// listar no es "no hay ninguna".
+    fn existe(&self, key: &str) -> Result<Option<Existencia>> {
+        self.api.existe(key).map(Some)
+    }
+
     fn available_transitions(&self, key: &str) -> Result<Option<Vec<String>>> {
         self.api.reachable_statuses(key).map(Some)
     }

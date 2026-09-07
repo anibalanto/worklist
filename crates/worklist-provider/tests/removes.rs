@@ -1,0 +1,179 @@
+//! Lo que el proveedor perdió sale del árbol, y **no se borra**.
+//!
+//! Ver `concepts/composition.md`.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+use std::process::Command;
+use worklist_provider::provider::{Existencia, Provider, Snapshot};
+use worklist_provider::removes::{recolectar, Paso, DIR};
+
+fn run(repo: &Path, args: &[&str]) {
+    let st = Command::new("git").arg("-C").arg(repo).args(args).status().unwrap();
+    assert!(st.success(), "git {args:?}");
+}
+
+/// Un proveedor que contesta lo que el test quiere sobre cada clave.
+struct Board(BTreeMap<String, Existencia>);
+
+impl Provider for Board {
+    fn snapshot(&self, _keys: &[String]) -> anyhow::Result<HashMap<String, Snapshot>> {
+        Ok(HashMap::new())
+    }
+    fn existe(&self, key: &str) -> anyhow::Result<Option<Existencia>> {
+        Ok(self.0.get(key).copied())
+    }
+}
+
+fn ventana() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let r = dir.path().join("repo");
+    std::fs::create_dir(&r).unwrap();
+    run(&r, &["init", "-q", "-b", "secure/sprint/1"]);
+    run(&r, &["config", "user.email", "t@t"]);
+    run(&r, &["config", "user.name", "t"]);
+    for k in ["ACC-1", "ACC-2"] {
+        std::fs::write(
+            r.join(format!("{k}.task.md")),
+            format!("---\ntitle: {k}\nstatus: open\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\ncuerpo de {k}\n"),
+        )
+        .unwrap();
+    }
+    run(&r, &["add", "-A"]);
+    run(&r, &["commit", "-qm", "arbol"]);
+    (dir, r)
+}
+
+fn en_rama(r: &Path, archivo: &str) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(r)
+        .args(["show", &format!("refs/heads/secure/sprint/1:{archivo}")])
+        .output()
+        .unwrap();
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Un 404 saca el ítem del árbol, y **su contenido queda a la vista**: el
+/// archivo se mueve, no se destruye.
+#[test]
+fn un_404_saca_el_item_y_conserva_su_contenido() {
+    let (_d, r) = ventana();
+    let mut board = BTreeMap::new();
+    board.insert("ACC-1".to_string(), Existencia::Borrada);
+    board.insert("ACC-2".to_string(), Existencia::Si);
+
+    let out = recolectar(&r, "refs/heads/secure/sprint/1", &Board(board), false).unwrap();
+
+    assert_eq!(out.sacados(), 1, "{:?}", out.pasos);
+    assert!(en_rama(&r, "ACC-1.task.md").is_none(), "sigue siendo un item del arbol");
+    let guardado = en_rama(&r, &format!("{DIR}/ACC-1.task.md")).expect("no quedo en removes");
+    assert!(guardado.contains("cuerpo de ACC-1"), "se perdio el contenido: {guardado}");
+    // Y el que sí existe no se toca.
+    assert!(en_rama(&r, "ACC-2.task.md").is_some());
+}
+
+/// **El caso que no puede fallar.** El proveedor dice *"no existe o no tienes
+/// permiso para verla"* para los dos, y el código los distingue: un 403 es una
+/// credencial sin permiso, y sacar un ítem por eso destruiría trabajo.
+#[test]
+fn un_403_no_saca_nada_y_lo_dice() {
+    let (_d, r) = ventana();
+    let mut board = BTreeMap::new();
+    board.insert("ACC-1".to_string(), Existencia::SinPermiso);
+    board.insert("ACC-2".to_string(), Existencia::SinPermiso);
+
+    let out = recolectar(&r, "refs/heads/secure/sprint/1", &Board(board), false).unwrap();
+
+    assert_eq!(out.sacados(), 0, "saco un item por un permiso: {:?}", out.pasos);
+    assert!(out.commit.is_none(), "escribio igual");
+    assert!(en_rama(&r, "ACC-1.task.md").is_some(), "borro por falta de permiso");
+    assert!(
+        out.pasos.iter().all(|p| matches!(p, Paso::SinPermiso { .. })),
+        "no lo reporto: {:?}",
+        out.pasos
+    );
+}
+
+/// Un proveedor que no puede contestar **no dice que existan**: no se pregunto.
+/// Es la misma regla que `sin verificar` contra `coincide`, con el costo subido
+/// a destruir.
+#[test]
+fn un_proveedor_que_no_contesta_no_saca_nada() {
+    let (_d, r) = ventana();
+    // El board vacío: no sabe de ninguna de las dos claves.
+    let out = recolectar(&r, "refs/heads/secure/sprint/1", &Board(BTreeMap::new()), false).unwrap();
+
+    assert_eq!(out.sacados(), 0);
+    assert_eq!(out.claves, 2);
+    assert!(
+        out.pasos.iter().all(|p| matches!(p, Paso::NoSePudoPreguntar { .. })),
+        "callo que no pudo preguntar: {:?}",
+        out.pasos
+    );
+    assert!(en_rama(&r, "ACC-1.task.md").is_some());
+}
+
+/// `--dry-run` dice y no mueve.
+#[test]
+fn el_dry_run_no_mueve() {
+    let (_d, r) = ventana();
+    let mut board = BTreeMap::new();
+    board.insert("ACC-1".to_string(), Existencia::Borrada);
+
+    let out = recolectar(&r, "refs/heads/secure/sprint/1", &Board(board), true).unwrap();
+
+    assert_eq!(out.sacados(), 1, "no dijo que sacaria");
+    assert!(out.commit.is_none());
+    assert!(en_rama(&r, "ACC-1.task.md").is_some(), "movio igual");
+}
+
+/// Y devolverlo es moverlo de nuevo: git lo registra como rename, así que el
+/// contenido y la historia siguen ahí.
+#[test]
+fn devolverlo_es_moverlo_de_nuevo() {
+    let (_d, r) = ventana();
+    let mut board = BTreeMap::new();
+    board.insert("ACC-1".to_string(), Existencia::Borrada);
+    recolectar(&r, "refs/heads/secure/sprint/1", &Board(board), false).unwrap();
+
+    // La rama ya está checkouteada acá, así que se mueve en el propio árbol.
+    run(&r, &["reset", "--hard", "--quiet", "refs/heads/secure/sprint/1"]);
+    run(&r, &["mv", &format!("{DIR}/ACC-1.task.md"), "ACC-1.task.md"]);
+    run(&r, &["commit", "-aqm", "el 404 era un error: vuelve"]);
+
+    let vuelto = en_rama(&r, "ACC-1.task.md").expect("no volvio");
+    assert!(vuelto.contains("cuerpo de ACC-1"));
+}
+
+/// **Sacar el archivo sin sacar la referencia deja el sprint roto**: el próximo
+/// recorte falla con *"la composición nombra a X, y no está"*. No es una
+/// mejora, es un requisito.
+#[test]
+fn el_item_sacado_tambien_sale_del_items() {
+    let (_d, r) = ventana();
+    // La composición nombra a las dos, como el panorama de verdad.
+    std::fs::create_dir_all(r.join(".metadata")).unwrap();
+    let mut p = worklist_core::product::Product::default();
+    p.sprints.push(worklist_core::product::Sprint {
+        id: "1".into(),
+        name: "1-el-primero".into(),
+        status: "in-progress".into(),
+        key: Some("6505".into()),
+        items: vec!["ACC-1".into(), "ACC-2".into()],
+    });
+    p.backlog.push("ACC-1".into());
+    std::fs::write(r.join(worklist_core::product::ARCHIVO), p.to_yaml().unwrap()).unwrap();
+    run(&r, &["add", "-A"]);
+    run(&r, &["commit", "-qm", "la composicion"]);
+
+    let mut board = BTreeMap::new();
+    board.insert("ACC-1".to_string(), Existencia::Borrada);
+    board.insert("ACC-2".to_string(), Existencia::Si);
+    recolectar(&r, "refs/heads/secure/sprint/1", &Board(board), false).unwrap();
+
+    let yaml = en_rama(&r, worklist_core::product::ARCHIVO).expect("quedo la composicion");
+    let quedó = worklist_core::product::de_yaml(&yaml).unwrap();
+    assert_eq!(quedó.sprints[0].items, vec!["ACC-2".to_string()], "sigue nombrando la sacada");
+    assert!(quedó.backlog.is_empty(), "quedo en el backlog: {:?}", quedó.backlog);
+}
