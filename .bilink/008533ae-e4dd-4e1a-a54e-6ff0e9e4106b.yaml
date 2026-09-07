@@ -21,6 +21,6 @@ endpoint:
       n:
         1:
           link: capture efc95480050c22c97dfb57bf357b7a2d fc1d61388ac1406b543f41a061317714 ffcb40170dd7f91fd53f345d6c1d7e27
-          hash: c0eab70cb208e486f0230b45f0e6f1558bff43635eebb2602771b4ffa29e2dac
-          hash_ast: 258710e4080fe7d02fd167ee89bdeb6ba7061024afb7118dc646502aa5881881
+          hash: db66f6bb4de444ac90352dd9863515706acf88537d69c84eb067e98b075728ea
+          hash_ast: 045cab6369248fdaade4dc75f6824aa752f8235161c7d82bc2a757709fe83539
     name: absorb
