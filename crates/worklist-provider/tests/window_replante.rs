@@ -2,6 +2,8 @@
 //! porque usa los dos crates — recortar es del cliente, propagar es del
 //! servidor. Ver `concepts/distribution.md`.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -43,6 +45,9 @@ fn arbol_aislado() -> (tempfile::TempDir, std::path::PathBuf) {
         "---\ntitle: El sprint\nstatus: in-progress\nitems: [ACC-2]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\nplan\n",
     )
     .unwrap();
+    // La composicion, que es de donde el recorte lee el `items`. El
+    // `.sprint.md` sigue al lado mientras las pasadas de sprint lo lean.
+    common::componer(&r, "10", "El sprint", &["ACC-2"], None);
     run(&r, &["add", "-A"]);
     run(&r, &["commit", "-q", "-m", "arbol"]);
     run(&r, &["branch", "-q", "insecure/all"]);

@@ -207,7 +207,14 @@ pub fn resolve(dir: &Path, spy: &Spy) -> worklist_provider::assign::WindowResult
 }
 /// Escribe el `.sprint.md` de una ventana. `key` es el id del proveedor, que
 /// **ausente significa que el sprint no existe del otro lado**.
+/// Escribe el sprint **en las dos formas**, que es donde esta la migracion.
+///
+/// La composicion —`.metadata/product.yaml`— es de donde el recorte lee desde
+/// `ACC-305`. El `.sprint.md` sigue porque las pasadas que sincronizan sprints
+/// todavia lo leen, y se va con ellas. Escribir las dos es lo que deja el arbol
+/// verde **durante** la mudanza en vez de al final.
 pub fn sprint(repo: &Path, id: &str, title: &str, items: &[&str], key: Option<&str>) {
+    componer(repo, id, title, items, key);
     std::fs::create_dir_all(repo.join("_sprints")).unwrap();
     let k = match key {
         Some(k) => format!("key: {k}\n"),
@@ -246,4 +253,24 @@ pub fn show_tree(repo: &Path, rev: &str) -> String {
         .unwrap();
     assert!(out.status.success(), "git ls-tree {rev}");
     format!("\n{}", String::from_utf8(out.stdout).unwrap())
+}
+
+/// La entrada de este sprint en la composicion, agregada a lo que ya haya.
+pub fn componer(repo: &Path, id: &str, title: &str, items: &[&str], key: Option<&str>) {
+    let path = repo.join(worklist_core::product::ARCHIVO);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut producto = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| worklist_core::product::de_yaml(&t).ok())
+        .unwrap_or_default();
+    producto.sprints.retain(|s| s.id != id);
+    producto.sprints.push(worklist_core::product::Sprint {
+        id: id.to_string(),
+        name: title.chars().take(19).collect(),
+        status: "in-progress".into(),
+        key: key.map(|k| k.to_string()),
+        items: items.iter().map(|s| s.to_string()).collect(),
+    });
+    producto.sprints.sort_by(|a, b| a.id.cmp(&b.id));
+    std::fs::write(&path, producto.to_yaml().unwrap()).unwrap();
 }

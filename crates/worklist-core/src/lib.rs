@@ -8,6 +8,7 @@
 //! binario del cliente no tenga con que escribir en el proveedor. Ver
 //! `concepts/distribution.md`.
 
+pub mod product;
 pub mod states;
 pub mod body;
 pub mod git;
@@ -371,6 +372,16 @@ pub fn commit_all(repo: &Path, msg: &str) -> Result<()> {
 /// referencia items: recorrer solo la raiz lo dejaba con los slugs viejos. Y
 /// bajar no puede confundir un directorio con un item, porque en el worklist
 /// **todo directorio empieza con `_`** y un nombre asi nunca es un id.
+/// Los archivos donde una referencia a un item puede estar escrita.
+///
+/// **Son los `.md` y la composicion.** Hasta que la composicion existiera, las
+/// referencias vivian sólo en prosa y en el `items` de un `.sprint.md`, que
+/// tambien era markdown; con `.metadata/product.yaml` la membresia se escribe
+/// en YAML, y un renombre que no lo alcance deja el sprint nombrando un slug
+/// que ya no existe.
+///
+/// Medido: el recorte fallaba con *"la composicion nombra a `@o`, y no esta"*
+/// justo despues de que el servidor le diera clave.
 fn markdown_files(root: &Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     let mut pila = vec![root.to_path_buf()];
@@ -384,7 +395,10 @@ fn markdown_files(root: &Path) -> Vec<std::path::PathBuf> {
                 if name != ".git" {
                     pila.push(p);
                 }
-            } else if p.extension().and_then(|x| x.to_str()) == Some("md") {
+            } else if p.extension().and_then(|x| x.to_str()) == Some("md")
+                || p.ends_with(crate::product::ARCHIVO)
+                || name == "product.yaml"
+            {
                 out.push(p);
             }
         }
@@ -427,6 +441,12 @@ pub fn rename_one(repo: &Path, old_slug: &str, new_id: &str) -> Result<Vec<Strin
     let dst_name = format!("{new_id}.{item_type}.md");
 
     let mut touched = Vec::new();
+    // La composicion primero, porque su regla es otra: ahi los ids son
+    // entradas de una lista y no links, asi que el reemplazo textual de abajo
+    // no los alcanza. Ver `product::renombrar_en`.
+    if crate::product::renombrar_en(repo, old_slug, new_id)? {
+        touched.push(crate::product::ARCHIVO.to_string());
+    }
     for path in markdown_files(repo) {
         let text = std::fs::read_to_string(&path)?;
         let (new_text, changed) = rewrite_references(&text, old_slug, &item_type, new_id);

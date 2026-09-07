@@ -51,20 +51,6 @@ fn read_items(repo: &Path, rev: &str) -> Result<HashMap<String, Item>> {
     Ok(items)
 }
 
-/// Los ids que el `items` del frontmatter del sprint declara.
-fn sprint_items(repo: &Path, rev: &str, sprint_file: &str) -> Result<Vec<String>> {
-    let text = git_output(repo, &["show", &format!("{rev}:{sprint_file}")])
-        .with_context(|| format!("el sprint {sprint_file} no existe en {rev}"))?;
-    let re = regex::Regex::new(r"(?m)^items:\s*\[([^\]]*)\]").unwrap();
-    let Some(c) = re.captures(&text) else {
-        bail!("{sprint_file} no declara `items` en su frontmatter");
-    };
-    Ok(regex::Regex::new(r"@?[A-Za-z0-9_-]+")
-        .unwrap()
-        .find_iter(&c[1])
-        .map(|m| m.as_str().to_string())
-        .collect())
-}
 
 /// Los archivos que lleva la ventana del sprint `sprint_id` en `rev`.
 ///
@@ -73,8 +59,15 @@ fn sprint_items(repo: &Path, rev: &str, sprint_file: &str) -> Result<Vec<String>
 /// para que la cadena `parent` cierre adentro— y el vocabulario de estados,
 /// que viaja por lo mismo: el cliente no tiene el panorama de donde leerlo.
 pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<String>> {
-    let sprint_file = format!("_sprints/{sprint_id}.sprint.md");
-    let declared = sprint_items(repo, rev, &sprint_file)?;
+    // El `items` sale de la composicion, que vive en el panorama de donde se
+    // corta. **No entra a la ventana**: es del servidor, y una copia del lado
+    // del cliente es una fuente de verdad que solo puede quedarse vieja — el
+    // mismo motivo por el que el panorama tampoco baja.
+    let producto = crate::product::leer(repo, rev)?;
+    let Some(sprint) = producto.sprint(sprint_id) else {
+        bail!("la composicion de {rev} no tiene el sprint `{sprint_id}`");
+    };
+    let declared = sprint.items.clone();
     let items = read_items(repo, rev)?;
 
     // hijos: se calculan, no se mantienen
@@ -90,7 +83,7 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
 
     for id in &declared {
         if !items.contains_key(id) {
-            bail!("{sprint_file} nombra a `{id}`, que no esta en {rev}");
+            bail!("la composicion nombra a `{id}` en el sprint {sprint_id}, y no esta en {rev}");
         }
         pending.push(id.clone());
     }
@@ -118,7 +111,14 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
     }
 
     let mut files: Vec<String> = keep.iter().map(|id| items[id].file.clone()).collect();
-    files.push(sprint_file);
+    // El `.sprint.md` **todavia viaja**, y ya no es de donde sale el `items`:
+    // eso lo lee la composicion. Sigue porque las pasadas que sincronizan
+    // sprints lo leen de la ventana, y se va con ellas — es la segunda mitad de
+    // `ACC-305`. Ver `concepts/composition.md`.
+    let sprint_file = format!("_sprints/{sprint_id}.sprint.md");
+    if git_output(repo, &["cat-file", "-e", &format!("{rev}:{sprint_file}")]).is_ok() {
+        files.push(sprint_file);
+    }
     // El vocabulario, si el proyecto lo declara: sin el, `state change` parado
     // en la ventana cae al vocabulario por defecto y rechaza un estado que el
     // proyecto si declara. Ver `concepts/states.md`.

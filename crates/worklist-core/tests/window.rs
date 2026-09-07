@@ -46,6 +46,7 @@ fn repo_con_arbol() -> tempfile::TempDir {
         "---\ntitle: El sprint\nstatus: in-progress\nitems: [ACC-2]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\nplan\n",
     )
     .unwrap();
+    componer(r, "10", "sprint 10", &["ACC-2"]);
 
     run(r, &["add", "-A"]);
     run(r, &["commit", "-q", "-m", "arbol"]);
@@ -79,6 +80,7 @@ fn arbol_aislado() -> (tempfile::TempDir, std::path::PathBuf) {
         "---\ntitle: El sprint\nstatus: in-progress\nitems: [ACC-2]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\nplan\n",
     )
     .unwrap();
+    componer(&r, "10", "sprint 10", &["ACC-2"]);
     run(&r, &["add", "-A"]);
     run(&r, &["commit", "-q", "-m", "arbol"]);
     run(&r, &["branch", "-q", "insecure/all"]);
@@ -115,11 +117,15 @@ fn head_de(r: &Path, refname: &str) -> String {
 }
 
 #[test]
-fn lleva_el_sprint_el_item_declarado_y_su_subarbol() {
+fn lleva_el_item_declarado_y_su_subarbol_y_no_la_composicion() {
     let dir = repo_con_arbol();
     let files = worklist_core::window::window_files(dir.path(), "HEAD", "10").unwrap();
 
-    assert!(files.contains(&"_sprints/10.sprint.md".to_string()));
+    // **La composicion no entra a la ventana.** Es del servidor, y una copia
+    // del lado del cliente es una fuente de verdad que solo puede quedarse
+    // vieja — el mismo motivo por el que el panorama tampoco baja.
+    assert!(!files.iter().any(|f| f.starts_with(".metadata/product")),
+        "la ventana se llevo la composicion: {files:?}");
     assert!(files.contains(&"ACC-2.user-story.md".to_string()), "el item declarado");
     assert!(files.contains(&"ACC-3.task.md".to_string()), "su hijo va con el");
 }
@@ -156,6 +162,7 @@ fn un_sprint_que_nombra_algo_que_no_esta_falla() {
         "---\ntitle: Roto\nstatus: open\nitems: [ACC-404]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n",
     )
     .unwrap();
+    componer(r, "11", "sprint 11", &["ACC-404"]);
     run(r, &["add", "-A"]);
     run(r, &["commit", "-q", "-m", "sprint roto"]);
 
@@ -321,7 +328,7 @@ fn opening_a_window_checked_out_somewhere_refuses() {
 fn la_ventana_lleva_el_vocabulario() {
     let dir = repo_con_arbol();
     let r = dir.path();
-    std::fs::create_dir(r.join(".metadata")).unwrap();
+    std::fs::create_dir_all(r.join(".metadata")).unwrap();
     std::fs::write(r.join(".metadata/states.yaml"), "states: [open, review, done]\n").unwrap();
     run(r, &["add", "-A"]);
     run(r, &["commit", "-q", "-m", "vocabulario"]);
@@ -340,4 +347,27 @@ fn sin_vocabulario_declarado_la_ventana_no_inventa_uno() {
     let dir = repo_con_arbol();
     let files = worklist_core::window::window_files(dir.path(), "HEAD", "10").unwrap();
     assert!(!files.iter().any(|f| f.starts_with(".metadata/")));
+}
+
+/// La composicion del producto: de aca lee el recorte desde `ACC-305`.
+///
+/// El `.sprint.md` sigue al lado porque las pasadas que sincronizan sprints
+/// todavia lo leen; se va con ellas.
+fn componer(r: &std::path::Path, id: &str, name: &str, items: &[&str]) {
+    let path = r.join(worklist_core::product::ARCHIVO);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut p = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| worklist_core::product::de_yaml(&t).ok())
+        .unwrap_or_default();
+    p.sprints.retain(|s| s.id != id);
+    p.sprints.push(worklist_core::product::Sprint {
+        id: id.into(),
+        name: name.into(),
+        status: "in-progress".into(),
+        key: None,
+        items: items.iter().map(|s| s.to_string()).collect(),
+    });
+    p.sprints.sort_by(|a, b| a.id.cmp(&b.id));
+    std::fs::write(&path, p.to_yaml().unwrap()).unwrap();
 }

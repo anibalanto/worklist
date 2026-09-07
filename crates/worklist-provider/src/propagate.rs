@@ -290,7 +290,11 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
             if let Some((id, key)) = sprint_subject(subject) {
                 let path = tmp.join("_sprints").join(format!("{id}.sprint.md"));
                 match std::fs::read_to_string(&path) {
+                    // La clave va a la composicion, que es donde vive lo que
+                    // el servidor sabe del sprint. El `.sprint.md` se sigue
+                    // anotando mientras exista, y se va con el.
                     Ok(text) if crate::assign::sprint_key(&text).is_none() => {
+                        worklist_core::product::anotar_key(&tmp, &id, &key)?;
                         std::fs::write(&path, crate::assign::with_sprint_key(&text, &key)?)?;
                         worklist_core::commit_all(&tmp, &format!("sprint: {id} -> {key}"))?;
                         steps.push(Step::SprintKeyed { id, key });
