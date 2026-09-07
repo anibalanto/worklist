@@ -1072,7 +1072,7 @@ fn cmd_check_push(
     // pudo hacer, no su resultado. Ver `commands/check-push.md`.
     if dry_run {
         let refname = refname.unwrap_or_else(|| worklist_core::git::PANORAMA.to_string());
-        let report = worklist_provider::check_push::check_ref(&repo, &refname, provider, &estados)?;
+        let report = worklist_provider::check_push::check_ref(&repo, &refname, provider, &estados, base)?;
         println!("{refname}: {} claves comparadas", report.compared);
         // Una clave que el proveedor no informa no es una que coincida: es una
         // que no se vio. Va aparte porque lo que hay que hacer con ella es
@@ -1124,7 +1124,7 @@ fn cmd_check_push(
             println!("        Recorta una ventana segura (secure/…) y empuja ahi.");
             continue;
         }
-        let rejected = check_one(&repo, &old, &new, &refname, provider, &estados)?;
+        let rejected = check_one(&repo, &old, &new, &refname, provider, &estados, base)?;
         for r in &rejected {
             any_rejected = true;
             print_difference(r, "reject", "");

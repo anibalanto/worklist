@@ -111,6 +111,7 @@ pub fn check_one(
     refname: &str,
     provider: &dyn Provider,
     estados: &Estados,
+    base: &str,
 ) -> Result<Vec<RejectedKey>> {
     // `old` en ceros es una rama que nace: no habia creencia previa que
     // comparar. `new` en ceros es un **borrado**, y borrar una rama no escribe
@@ -132,7 +133,7 @@ pub fn check_one(
     // El titulo y el cuerpo, solo sobre lo que este push escribe.
     for key in crate::assign::changed_keys(repo, old, new)? {
         let Some(snap) = live.get(&key) else { continue };
-        out.extend(compare_content(repo, old, &key, snap));
+        out.extend(compare_content(repo, old, &key, snap, base));
     }
 
     // ── La transicion propuesta.
@@ -176,6 +177,7 @@ pub fn check_ref(
     refname: &str,
     provider: &dyn Provider,
     estados: &Estados,
+    base: &str,
 ) -> Result<RefReport> {
     let beliefs = tip_beliefs(repo, refname)?;
     let mut keys: Vec<String> = beliefs.keys().cloned().collect();
@@ -186,7 +188,7 @@ pub fn check_ref(
     let mut differences = compare_status(&beliefs, &live, estados);
     for key in &keys {
         let Some(snap) = live.get(key) else { continue };
-        differences.extend(compare_content(repo, refname, key, snap));
+        differences.extend(compare_content(repo, refname, key, snap, base));
     }
     differences.sort_by(|a, b| (&a.key, a.field).cmp(&(&b.key, b.field)));
 
@@ -252,6 +254,7 @@ fn compare_content(
     rev: &str,
     key: &str,
     snap: &crate::provider::Snapshot,
+    base: &str,
 ) -> Option<RejectedKey> {
     let file = file_of(repo, rev, key).ok()?;
     let text = git_output(repo, &["show", &format!("{rev}:{file}")]).ok()?;
@@ -271,10 +274,18 @@ fn compare_content(
 
     // Se compara **markdown contra markdown**: lo guardado es la vuelta del
     // round-trip, asi que el archivo del tip es lo que el proveedor deberia
-    // tener. Convertir de un solo lado alcanza.
+    // tener.
+    //
+    // Pero el archivo del tip esta **de este lado del borde**, y el borde
+    // traduce: aca un item cita a otro por su archivo y alla eso es una URL.
+    // Asi que se aplica la misma ida que aplica el que sube — y no la vuelta
+    // del otro lado, que necesitaria saber el tipo de cada item y en un bare no
+    // hay donde mirarlo. Medido: sin esto, 248 de 295 items "diferian". Ver
+    // `concepts/sync.md`.
     let live_adf = snap.description.as_ref()?;
     let live_body = worklist_core::body::adf_to_body(live_adf).ok()?;
-    let (_, tip_body) = worklist_core::body::split_frontmatter(&text);
+    let (_, raw_body) = worklist_core::body::split_frontmatter(&text);
+    let tip_body = worklist_core::body::links_out(raw_body, base);
     if live_body.trim() == tip_body.trim() {
         return None;
     }

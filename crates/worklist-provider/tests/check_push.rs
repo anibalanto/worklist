@@ -7,6 +7,10 @@ use worklist_provider::check_push::check_one;
 use worklist_provider::provider::FileProvider;
 use worklist_provider::states::Estados;
 
+/// La base del proveedor. Sale de la comparacion del cuerpo, que traduce los
+/// links del borde antes de comparar. Ver `concepts/sync.md`.
+const BASE: &str = "https://ejemplo.atlassian.net";
+
 /// El mapeo del proveedor de prueba **es** la identidad: su archivo lleva
 /// valores con la forma del worklist. Ver `concepts/states.md`.
 fn estados() -> Estados {
@@ -48,7 +52,7 @@ fn coincide_no_rechaza_nada() {
     let provider = FileProvider::new(&provider_file);
     provider.set_status("ACC-101", "open").unwrap();
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados(), BASE).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -60,7 +64,7 @@ fn el_proveedor_se_movio_y_se_rechaza() {
     let provider = FileProvider::new(&provider_file);
     provider.set_status("ACC-101", "done").unwrap(); // alguien lo cerro en Jira
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/secure/sprint/10", &provider, &estados(), BASE).unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].key, "ACC-101");
     assert_eq!(rejected[0].tip, "open");
@@ -74,7 +78,7 @@ fn una_rama_que_no_es_ventana_no_se_chequea() {
     let provider = FileProvider::new(repo.join("provider.json"));
     provider.set_status("ACC-101", "done").unwrap();
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/main", &provider, &estados()).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/main", &provider, &estados(), BASE).unwrap();
     assert!(rejected.is_empty(), "una rama fuera de sprint/* o backlog no se valida");
 }
 
@@ -85,7 +89,7 @@ fn una_rama_nueva_sin_tip_anterior_no_se_chequea() {
     let provider = FileProvider::new(repo.join("provider.json"));
 
     let all_zeros = "0".repeat(40);
-    let rejected = check_one(repo, &all_zeros, &all_zeros, "refs/heads/secure/sprint/11", &provider, &estados()).unwrap();
+    let rejected = check_one(repo, &all_zeros, &all_zeros, "refs/heads/secure/sprint/11", &provider, &estados(), BASE).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -109,7 +113,7 @@ fn una_insegura_no_se_verifica_aunque_el_proveedor_se_haya_movido() {
     let provider = FileProvider::new(repo.join("provider.json"));
     provider.set_status("ACC-101", "done").unwrap();
 
-    let rejected = check_one(repo, &tip, &tip, "refs/heads/insecure/all", &provider, &estados()).unwrap();
+    let rejected = check_one(repo, &tip, &tip, "refs/heads/insecure/all", &provider, &estados(), BASE).unwrap();
     assert!(rejected.is_empty());
 }
 
@@ -174,7 +178,7 @@ fn un_cuerpo_editado_en_el_proveedor_rechaza_el_push() {
             ..Default::default()
         },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert_eq!(r.len(), 1, "tiene que rechazar");
     assert_eq!(r[0].field, "cuerpo");
     assert_eq!(r[0].key, "ACC-101");
@@ -192,7 +196,7 @@ fn un_cuerpo_que_coincide_no_rechaza() {
             ..Default::default()
         },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert!(r.is_empty(), "coincide, no hay nada que rechazar: {:?}", r[0].key);
 }
 
@@ -208,7 +212,7 @@ fn un_titulo_editado_en_el_proveedor_rechaza_el_push() {
             ..Default::default()
         },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].field, "titulo");
 }
@@ -249,7 +253,7 @@ fn un_item_que_el_push_no_toca_no_se_compara_por_cuerpo() {
             Snapshot { status: Some("open".into()), ..Default::default() },
         ),
     ]));
-    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert!(r.is_empty(), "no se escribe ACC-101, no hay nada que probar: {:?}", r.first().map(|x| &x.key));
 }
 
@@ -276,7 +280,7 @@ fn el_status_se_compara_aunque_el_push_no_toque_el_item() {
         "ACC-101".to_string(),
         Snapshot { status: Some("in-progress".into()), ..Default::default() },
     )]));
-    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(repo, &old, &new, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].field, "status");
 }
@@ -290,7 +294,7 @@ fn un_proveedor_que_no_informa_el_cuerpo_no_rechaza() {
         "ACC-101".to_string(),
         Snapshot { status: Some("open".into()), ..Default::default() },
     )]));
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert!(r.is_empty(), "sin dato no hay divergencia que afirmar");
 }
 
@@ -303,7 +307,7 @@ fn borrar_una_rama_no_se_verifica() {
     let ceros = "0".repeat(40);
     let provider = FileProvider::new(dir.path().join("provider.json"));
     provider.set_status("ACC-101", "in-progress").unwrap();  // divergiria, si se mirara
-    let r = check_one(dir.path(), &tip, &ceros, "refs/heads/secure/sprint/10", &provider, &estados()).unwrap();
+    let r = check_one(dir.path(), &tip, &ceros, "refs/heads/secure/sprint/10", &provider, &estados(), BASE).unwrap();
     assert!(r.is_empty(), "un borrado no verifica nada");
 }
 
@@ -383,12 +387,12 @@ fn repo_que_mueve(estado: &str) -> (tempfile::TempDir, String, String) {
 fn el_status_se_compara_traducido_y_no_crudo() {
     let (dir, old, _) = repo_que_mueve("open");
     let p = ConWorkflow { status: "To Do".into(), disponibles: None };
-    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &con_jira(), BASE).unwrap();
     assert!(r.is_empty(), "traducido coincide: {:?}", r.iter().map(|x| x.field).collect::<Vec<_>>());
 
     // Y con el mapeo identidad —el del proveedor de prueba— el mismo estado
     // rechaza, que es exactamente el defecto que este item cierra.
-    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &estados()).unwrap();
+    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &estados(), BASE).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].field, "status");
 }
@@ -402,7 +406,7 @@ fn una_transicion_ilegal_rechaza_el_push_y_dice_cuales_si() {
         status: "To Do".into(),
         disponibles: Some(vec!["Ready for Review".into()]),
     };
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira(), BASE).unwrap();
     assert_eq!(r.len(), 1, "{r:?}", r = r.iter().map(|x| x.field).collect::<Vec<_>>());
     assert_eq!(r[0].field, "transicion", "no es una deriva: es una regla");
     assert_eq!(r[0].tip, "Done", "el destino traducido");
@@ -414,7 +418,7 @@ fn una_transicion_ilegal_rechaza_el_push_y_dice_cuales_si() {
 fn una_transicion_legal_no_rechaza() {
     let (dir, old, new) = repo_que_mueve("done");
     let p = ConWorkflow { status: "To Do".into(), disponibles: Some(vec!["Done".into()]) };
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira(), BASE).unwrap();
     assert!(r.is_empty(), "{:?}", r.iter().map(|x| x.field).collect::<Vec<_>>());
 }
 
@@ -424,7 +428,7 @@ fn una_transicion_legal_no_rechaza() {
 fn un_proveedor_sin_workflow_no_rechaza_por_regla() {
     let (dir, old, new) = repo_que_mueve("done");
     let p = ConWorkflow { status: "To Do".into(), disponibles: None };
-    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    let r = check_one(dir.path(), &old, &new, "refs/heads/secure/sprint/1", &p, &con_jira(), BASE).unwrap();
     assert!(r.is_empty(), "{:?}", r.iter().map(|x| x.field).collect::<Vec<_>>());
 }
 
@@ -467,11 +471,11 @@ fn un_borrado_propone_dropped_con_su_resolucion() {
 fn un_status_fuera_del_vocabulario_se_rechaza() {
     let (dir, old, _) = repo_que_mueve("inventado");
     let p = ConWorkflow { status: "To Do".into(), disponibles: None };
-    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &con_jira()).unwrap();
+    let r = check_one(dir.path(), &old, &old, "refs/heads/secure/sprint/1", &p, &con_jira(), BASE).unwrap();
     // El tip de `old` dice `open`; el que quedo fuera del vocabulario es el de
     // `new`, asi que este caso se arma al reves: el tip **es** el inventado.
     let (dir2, _, new2) = repo_que_mueve("inventado");
-    let r2 = check_one(dir2.path(), &new2, &new2, "refs/heads/secure/sprint/1", &p, &con_jira())
+    let r2 = check_one(dir2.path(), &new2, &new2, "refs/heads/secure/sprint/1", &p, &con_jira(), BASE)
         .unwrap();
     assert!(r.is_empty(), "el tip de old estaba bien");
     assert_eq!(r2.len(), 1);
@@ -512,10 +516,10 @@ fn una_rama_insegura_se_lee_en_vez_de_saltearse() {
         ("ACC-102".to_string(), Snapshot { status: Some("open".into()), ..Default::default() }),
     ]));
     let salteada =
-        check_one(dir.path(), "HEAD", "HEAD", "refs/heads/insecure/all", &p, &estados()).unwrap();
+        check_one(dir.path(), "HEAD", "HEAD", "refs/heads/insecure/all", &p, &estados(), BASE).unwrap();
     assert!(salteada.is_empty(), "verificando un push, la insegura no se compara");
 
-    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados(), BASE).unwrap();
     assert_eq!(r.compared, 2);
     assert_eq!(r.differences.len(), 1, "ACC-101 difiere en status");
     assert_eq!(r.differences[0].key, "ACC-101");
@@ -545,7 +549,7 @@ fn el_cuerpo_se_compara_sobre_todas_las_claves_del_tip() {
             },
         ),
     ]));
-    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados(), BASE).unwrap();
     assert_eq!(r.differences.len(), 1, "{:?}", r.differences.iter().map(|d| &d.key).collect::<Vec<_>>());
     assert_eq!(r.differences[0].key, "ACC-101");
     assert_eq!(r.differences[0].field, "cuerpo");
@@ -567,7 +571,7 @@ fn un_cuerpo_que_difiere_dice_en_que_linea() {
         ),
         ("ACC-102".to_string(), Snapshot { status: Some("open".into()), ..Default::default() }),
     ]));
-    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados(), BASE).unwrap();
     assert_eq!(r.differences.len(), 1);
     let d = &r.differences[0];
     assert_eq!(d.field, "cuerpo");
@@ -585,8 +589,36 @@ fn una_clave_que_el_proveedor_no_informa_no_cuenta_como_comparada() {
         "ACC-101".to_string(),
         Snapshot { status: Some("open".into()), ..Default::default() },
     )]));
-    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados()).unwrap();
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados(), BASE).unwrap();
     assert_eq!(r.compared, 1);
     assert_eq!(r.uninformed, vec!["ACC-102".to_string()]);
     assert!(r.differences.is_empty());
+}
+
+/// **El borde traduce.** En el arbol un item cita a otro por su archivo; en el
+/// proveedor eso es una URL. Comparar el archivo crudo contra lo que el
+/// proveedor devuelve los llama distintos — y medido el 2026-09-07 eso hacia
+/// "diferir" a 248 de 295 items. Ver `concepts/sync.md`.
+#[test]
+fn un_link_a_otro_item_no_es_una_diferencia() {
+    let dir = panorama("mira [`ACC-102`](ACC-102.task.md) que lo dice", "igual");
+    let p = Rico(HashMap::from([
+        (
+            "ACC-101".to_string(),
+            Snapshot {
+                status: Some("open".into()),
+                description: Some(adf(&format!(
+                    "mira [`ACC-102`]({BASE}/browse/ACC-102) que lo dice"
+                ))),
+                ..Default::default()
+            },
+        ),
+        ("ACC-102".to_string(), Snapshot { status: Some("open".into()), ..Default::default() }),
+    ]));
+    let r = check_ref(dir.path(), "refs/heads/insecure/all", &p, &estados(), BASE).unwrap();
+    assert!(
+        r.differences.is_empty(),
+        "el link traducido es el mismo cuerpo: {:?}",
+        r.differences.first().map(|d| (&d.key, d.line, &d.tip, &d.live))
+    );
 }
