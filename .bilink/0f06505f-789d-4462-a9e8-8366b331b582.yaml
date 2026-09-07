@@ -4,15 +4,15 @@ endpoint:
     link: path <
     accepted:
     - agree:
-      - test
+      - Anibal
       link: capture 74bf56d5b0f7975feeca099111ba99ef
-      hash: 7cef4651e3299dd8900c8666c722168ac5412cbe74b407d16608415627ec0443
+      hash: a765553b0b7bdbe1ddf4c34708d50db64f0e8cafd80cd13a3b300a83886f7b2e
   1:
     link: capture 7133c51a4906440a8fc227997e28ea40
     accepted:
     - agree:
-      - test
-      link: capture 523cfa589b5f17833e14d63426f1ef27
+      - Anibal
+      link: capture 7133c51a4906440a8fc227997e28ea40
       hash: ab71687cbf7be1378b8656b13ee5024dabe9014b326f67281a02ce1c11f909cd
       hash_ast: 87937a635eeb9516a274c0a411b5be4a56559e68de73678fe19abb5aec473742
       n:
