@@ -112,7 +112,12 @@ pub trait Board {
     fn parent_of(&self, key: &str) -> Result<Option<String>>;
     /// Mete issues en un sprint. **De lote**: el transporte toma decenas por
     /// llamada, y hacerlo de a uno seria una llamada por issue.
-    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> Result<usize>;
+    /// Devuelve cuantas entraron y **cuales rechazo el proveedor**.
+    ///
+    /// Las rechazadas no son un error del lote: son claves que el worklist
+    /// tiene y el board no. Callarlas seria perder el unico lugar donde esa
+    /// deriva se ve.
+    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> Result<(usize, Vec<String>)>;
     /// El id del sprint del board que se llame asi, creandolo si no esta.
     /// Devuelve `(id, si_lo_creo)`.
     ///
@@ -640,13 +645,37 @@ impl Board for JiraBoard {
     /// no tiene, y de donde sale la correspondencia entre un sprint del
     /// worklist y uno de Jira es una decision abierta. Mientras tanto lo unico
     /// que hay es el codigo de salida, y esta dicho que no alcanza.
-    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> Result<usize> {
+    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> Result<(usize, Vec<String>)> {
+        let mut entraron = 0;
+        let mut muertas: Vec<String> = Vec::new();
         for lote in keys.chunks(SPRINT_BATCH) {
-            let mut args = vec!["sprint", "add", sprint];
-            args.extend_from_slice(lote);
-            jira(Op::AddToSprint, None, &args)?;
+            let mut quedan: Vec<&str> = lote.to_vec();
+            loop {
+                if quedan.is_empty() {
+                    break;
+                }
+                let mut args = vec!["sprint", "add", sprint];
+                args.extend_from_slice(&quedan);
+                let (ok, _, fallo) = jira_raw(Op::AddToSprint, None, &args)?;
+                if ok {
+                    entraron += quedan.len();
+                    break;
+                }
+                // **El lote es todo o nada del lado de Jira**: una clave que no
+                // existe lo rechaza entero. Medido: `ACC-268` estaba borrada del
+                // board y arrastraba a otras seis, en cada push.
+                //
+                // Asi que se sacan las que el proveedor nombro y se reintenta
+                // con el resto. Perder seis por una es peor que decir cual fue.
+                let rechazadas = claves_rechazadas(&format!("{fallo:#}"), &quedan);
+                if rechazadas.is_empty() {
+                    return Err(fallo);
+                }
+                quedan.retain(|k| !rechazadas.iter().any(|r| r == k));
+                muertas.extend(rechazadas);
+            }
         }
-        Ok(keys.len())
+        Ok((entraron, muertas))
     }
 
     fn create_or_find_sprint(&self, board: &str, name: &str) -> Result<(String, bool)> {
@@ -790,4 +819,17 @@ pub fn dry_run_plan(project: &str, item_type: &str, title: &str, description: &s
         display(title),
         display(description),
     ))
+}
+
+/// Las claves que el proveedor nombro al rechazar el lote.
+///
+/// `jira-cli` las lista una por linea como `- ACC-268: <motivo>`. Se cruzan
+/// contra las que se mandaron: una linea que nombre algo que no estaba en el
+/// lote no dice nada de este lote.
+pub fn claves_rechazadas(salida: &str, mandadas: &[&str]) -> Vec<String> {
+    mandadas
+        .iter()
+        .filter(|k| salida.contains(&format!("- {k}:")))
+        .map(|k| k.to_string())
+        .collect()
 }

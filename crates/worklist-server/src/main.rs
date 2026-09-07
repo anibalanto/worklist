@@ -718,6 +718,15 @@ fn cmd_assign_keys(
         }
         if let Some(s) = &r.sprint {
             let creado = if s.created { " (creado)" } else { "" };
+            // Las que el board rechazo van en su propia linea: son claves que el
+            // worklist tiene y el proveedor no, y este es el unico lugar donde
+            // esa deriva se ve. Meterlas en la cuenta las taparia.
+            if !s.rechazadas.is_empty() {
+                println!(
+                    "  ! el board rechazo {}: el worklist las tiene y el no",
+                    s.rechazadas.join(", ")
+                );
+            }
             match s.already {
                 Some(ya) => println!(
                     "  sprint {} -> {}{}: {} issue(s) agregados, {ya} ya estaban",

@@ -67,6 +67,12 @@ pub struct SprintResult {
     pub created: bool,
     /// Las claves que entraron ahora.
     pub added: Vec<String>,
+    /// Las que el proveedor **rechazo**: el worklist las tiene y el board no.
+    ///
+    /// No es un fracaso de la pasada — es deriva, y este es el unico lugar
+    /// donde se ve. Medido el 2026-09-07: `ACC-268` estaba borrada del board y
+    /// el lote es todo o nada, asi que arrastraba a otras seis en cada push.
+    pub rechazadas: Vec<String>,
     /// Cuantas ya estaban adentro. **Volver a correrlo es esto y nada mas.**
     ///
     /// `None` es *"no se pregunto"* — el `--dry-run` no habla con el proveedor,
@@ -498,6 +504,9 @@ pub(crate) fn resolve_sprint(
             key: sprint_key(&text).unwrap_or_else(|| "(dry-run)".into()),
             created: false,
             added: members,
+            // El `--dry-run` no habla con el proveedor, asi que no puede saber
+            // cuales rechazaria. Vacio aca es "no se pregunto".
+            rechazadas: Vec::new(),
             already: None,
         });
     }
@@ -520,14 +529,25 @@ pub(crate) fn resolve_sprint(
     let adentro = board.sprint_items(board_id, &key)?;
     let faltan: Vec<&str> =
         members.iter().filter(|m| !adentro.contains(m)).map(|m| m.as_str()).collect();
+    // Las que el board rechazo no frenan la pasada: son claves que el worklist
+    // tiene y el proveedor no, y **esto es el unico lugar donde esa deriva se
+    // ve**. Frenar aca hacia que una clave muerta bloqueara el sprint entero,
+    // en cada push.
+    let mut rechazadas = Vec::new();
     if !faltan.is_empty() {
-        board.add_to_sprint(&key, &faltan)?;
+        let (_, muertas) = board.add_to_sprint(&key, &faltan)?;
+        rechazadas = muertas;
     }
     Ok(SprintResult {
         id: id.to_string(),
         key,
         created,
-        added: faltan.iter().map(|s| s.to_string()).collect(),
+        added: faltan
+            .iter()
+            .filter(|k| !rechazadas.iter().any(|r| r == *k))
+            .map(|s| s.to_string())
+            .collect(),
+        rechazadas,
         already: Some(members.len() - faltan.len()),
     })
 }

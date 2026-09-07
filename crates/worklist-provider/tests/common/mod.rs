@@ -115,7 +115,7 @@ impl Board for Spy {
         ps.push((key.into(), epic.into()));
         Ok(true)
     }
-    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<usize> {
+    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<(usize, Vec<String>)> {
         self.sprinted
             .borrow_mut()
             .push((sprint.into(), keys.iter().map(|k| k.to_string()).collect()));
@@ -129,7 +129,7 @@ impl Board for Spy {
             Some((_, ks)) => ks.extend(keys.iter().map(|k| k.to_string())),
             None => inside.push((sprint.into(), keys.iter().map(|k| k.to_string()).collect())),
         }
-        Ok(keys.len())
+        Ok((keys.len(), Vec::new()))
     }
     fn transition(&self, key: &str, destino: &Destino) -> anyhow::Result<Transicion> {
         if self.rechaza.iter().any(|k| k == key) {

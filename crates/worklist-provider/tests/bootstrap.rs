@@ -221,8 +221,8 @@ impl worklist_provider::board::Board for SeCaeEn {
     fn create_or_find_sprint(&self, _b: &str, _n: &str) -> anyhow::Result<(String, bool)> {
         Ok(("1".into(), false))
     }
-    fn add_to_sprint(&self, _s: &str, _k: &[&str]) -> anyhow::Result<usize> {
-        Ok(0)
+    fn add_to_sprint(&self, _s: &str, _k: &[&str]) -> anyhow::Result<(usize, Vec<String>)> {
+        Ok((0, Vec::new()))
     }
     fn sprint_items(&self, _b: &str, _s: &str) -> anyhow::Result<Vec<String>> {
         Ok(vec![])

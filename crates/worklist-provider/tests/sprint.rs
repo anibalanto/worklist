@@ -254,7 +254,7 @@ impl worklist_provider::board::Board for ConBoard {
     fn parent_of(&self, key: &str) -> anyhow::Result<Option<String>> {
         self.inner.parent_of(key)
     }
-    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<usize> {
+    fn add_to_sprint(&self, sprint: &str, keys: &[&str]) -> anyhow::Result<(usize, Vec<String>)> {
         self.inner.add_to_sprint(sprint, keys)
     }
     fn transition(
@@ -343,4 +343,32 @@ fn el_nombre_recortado_es_el_mismo_todas_las_veces() {
 #[test]
 fn sin_titulo_el_nombre_es_el_numero() {
     assert_eq!(worklist_provider::assign::sprint_name("7", None), "7");
+}
+
+/// **Una clave muerta no puede llevarse el lote.**
+///
+/// Medido el 2026-09-07 contra el board real: `ACC-268` estaba borrada de Jira,
+/// y `jira sprint add` rechaza el lote **entero** si una clave no existe. Las
+/// otras seis no entraban, en cada push, y la pasada fallaba con un `400` que
+/// no decía cuál era.
+#[test]
+fn una_clave_que_el_board_no_tiene_no_frena_a_las_demas() {
+    let salida = "Error:\n  - ACC-268: La incidencia no existe o no tienes permiso para verla.\n\n\
+                  jira: Received unexpected response '400 Bad Request'.";
+    let mandadas = ["ACC-268", "ACC-303", "ACC-305"];
+
+    let rechazadas = worklist_provider::board::claves_rechazadas(salida, &mandadas);
+
+    assert_eq!(rechazadas, vec!["ACC-268".to_string()], "no reconocio cual era");
+}
+
+/// Y una salida que no nombra ninguna de las que se mandaron **no es** una
+/// clave muerta: es otro fracaso, y ahí el error tiene que subir en vez de
+/// reintentarse en un bucle.
+#[test]
+fn un_fracaso_que_no_nombra_claves_no_se_confunde_con_una_muerta() {
+    let salida = "jira: Received unexpected response '401 Unauthorized'.";
+    let mandadas = ["ACC-303", "ACC-305"];
+
+    assert!(worklist_provider::board::claves_rechazadas(salida, &mandadas).is_empty());
 }
