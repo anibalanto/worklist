@@ -1,0 +1,252 @@
+//! `worklist-server absorb`: lo que cambio en el board entra a la ventana.
+//!
+//! **Es la unica direccion que faltaba.** `push-states` sube el status,
+//! `propagate` sube lo que la ventana resolvio, `reconcile` adopta issues que
+//! ya existen del otro lado — la existencia, no el contenido. Un cambio hecho
+//! en el board se **detectaba** —`check-push` rechazaba el push— y no tenia por
+//! donde entrar.
+//!
+//! Es del servidor por los dos criterios: habla con el proveedor y escribe en
+//! una rama suya. Y eso es lo que deja al cliente sin cambiar — `pull` lo
+//! invoca y despues baja lo que el servidor escribio, como cualquier otra cosa.
+//!
+//! Ver `commands/absorb.md`.
+
+use crate::provider::Provider;
+use crate::states::Estados;
+use anyhow::Result;
+use std::path::Path;
+use worklist_core::git::git_output;
+
+/// Que se hizo con cada clave que difiere.
+#[derive(Debug)]
+pub enum Paso {
+    /// Se escribio el valor del proveedor en el archivo.
+    Absorbido { key: String, campo: &'static str, antes: String, ahora: String },
+    /// Difiere y **no se toca**, con el motivo. Reportar de mas es ruido;
+    /// absorber de mas es escribir.
+    Reportado { key: String, campo: &'static str, porque: String },
+}
+
+#[derive(Debug, Default)]
+pub struct Absorbido {
+    pub claves: usize,
+    pub pasos: Vec<Paso>,
+    /// El commit que quedo, si hubo algo que absorber.
+    pub commit: Option<String>,
+}
+
+impl Absorbido {
+    pub fn absorbidos(&self) -> usize {
+        self.pasos.iter().filter(|p| matches!(p, Paso::Absorbido { .. })).count()
+    }
+    pub fn reportados(&self) -> usize {
+        self.pasos.iter().filter(|p| matches!(p, Paso::Reportado { .. })).count()
+    }
+}
+
+/// Trae a la rama de la ventana lo que el proveedor dice y el tip no.
+pub fn absorb(
+    repo: &Path,
+    refname: &str,
+    provider: &dyn Provider,
+    estados: &Estados,
+    dry_run: bool,
+) -> Result<Absorbido> {
+    let beliefs = crate::check_push::tip_beliefs(repo, refname)?;
+    let mut claves: Vec<String> = beliefs.keys().cloned().collect();
+    claves.sort();
+
+    let mut out = Absorbido { claves: claves.len(), ..Default::default() };
+    if claves.is_empty() {
+        return Ok(out);
+    }
+
+    // Una sola operacion, con todas las claves juntas: contra Jira es una JQL
+    // paginada y no una llamada por item. Para una ventana de 19 es **una**
+    // consulta — el numero caro es el panorama de 292, que no es esto.
+    let vivo = provider.snapshot(&claves)?;
+
+    // Lo que todavia no subio es lo que no se pisa: entre la marca de
+    // propagacion y el tip esta el trabajo que nadie mas vio, y ahi los dos
+    // lados escribieron. La negativa es el dato.
+    let mios = tocados_desde_la_marca(repo, refname).unwrap_or_default();
+
+    let mut escrituras: Vec<(String, String)> = Vec::new();
+    for key in &claves {
+        let Some(snap) = vivo.get(key) else { continue };
+        let Ok(file) = archivo_de(repo, refname, key) else { continue };
+        let Ok(texto) = git_output(repo, &["show", &format!("{refname}:{file}")]) else { continue };
+        let mut texto = texto;
+        let mut cambio = false;
+
+        // --- titulo: la vuelta es directa ---
+        if let (Some(alla), Some(aca)) = (&snap.summary, crate::assign::title_of(&texto)) {
+            if *alla != aca {
+                if mios.contains(&file) {
+                    out.pasos.push(Paso::Reportado {
+                        key: key.clone(),
+                        campo: "titulo",
+                        porque: "cambiado alla y aca desde la ultima propagacion — no se toca"
+                            .into(),
+                    });
+                } else {
+                    texto = con_titulo(&texto, alla);
+                    cambio = true;
+                    out.pasos.push(Paso::Absorbido {
+                        key: key.clone(),
+                        campo: "titulo",
+                        antes: aca,
+                        ahora: alla.clone(),
+                    });
+                }
+            }
+        }
+
+        // --- status: solo si la vuelta es unica ---
+        if let (Some(alla), Some(aca)) = (&snap.status, beliefs.get(key)) {
+            let esperado = estados.destino(aca).map(|d| d.status().to_string());
+            if esperado.as_deref() != Some(alla.as_str()) {
+                let candidatos = estados.desde(alla);
+                match candidatos.as_slice() {
+                    // **Elegir es inventar.** Que dos estados del worklist
+                    // compartan uno del proveedor no es un defecto del comando:
+                    // es una limitacion del board, y va a seguir pasando.
+                    [] => out.pasos.push(Paso::Reportado {
+                        key: key.clone(),
+                        campo: "status",
+                        porque: format!("el board dice \"{alla}\", que no vuelve a ningun estado del vocabulario"),
+                    }),
+                    [uno] => {
+                        if mios.contains(&file) {
+                            out.pasos.push(Paso::Reportado {
+                                key: key.clone(),
+                                campo: "status",
+                                porque: "cambiado alla y aca desde la ultima propagacion — no se toca".into(),
+                            });
+                        } else {
+                            let (nuevo, antes) =
+                                worklist_core::states::proponer(&texto, uno, &ahora())?;
+                            texto = nuevo;
+                            cambio = true;
+                            out.pasos.push(Paso::Absorbido {
+                                key: key.clone(),
+                                campo: "status",
+                                antes,
+                                ahora: (*uno).to_string(),
+                            });
+                        }
+                    }
+                    varios => out.pasos.push(Paso::Reportado {
+                        key: key.clone(),
+                        campo: "status",
+                        porque: format!(
+                            "el board dice \"{alla}\", que vuelve a `{}` — no se elige solo",
+                            varios.join("` o a `")
+                        ),
+                    }),
+                }
+            }
+        }
+
+        // --- cuerpo: no, todavia ---
+        //
+        // 113 de los 149 que difieren son del conversor, asi que absorber hoy
+        // reescribiria mas de cien items con cambios que nadie hizo. Se reporta,
+        // que es lo que `check-push` ya hace.
+        if let Some(adf) = &snap.description {
+            if cuerpo_difiere(&texto, adf) {
+                out.pasos.push(Paso::Reportado {
+                    key: key.clone(),
+                    campo: "cuerpo",
+                    porque: "el cuerpo no se absorbe todavia: el round-trip no cierra".into(),
+                });
+            }
+        }
+
+        if cambio {
+            escrituras.push((file, texto));
+        }
+    }
+
+    if escrituras.is_empty() || dry_run {
+        return Ok(out);
+    }
+    out.commit = Some(escribir(repo, refname, &escrituras)?);
+    Ok(out)
+}
+
+/// Los archivos que la ventana toco **despues** de la ultima propagacion: el
+/// trabajo que nadie mas vio, y por lo tanto lo que absorber pisaria.
+fn tocados_desde_la_marca(repo: &Path, refname: &str) -> Option<Vec<String>> {
+    let marca = worklist_core::git::rev_parse(repo, &worklist_core::git::propagated_ref(refname))?;
+    let salida = git_output(repo, &["diff", "--name-only", &marca, refname]).ok()?;
+    Some(salida.lines().map(|s| s.to_string()).collect())
+}
+
+fn archivo_de(repo: &Path, rev: &str, key: &str) -> Result<String> {
+    let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
+    listing
+        .lines()
+        .find(|n| crate::provider::key_of_filename(n).as_deref() == Some(key))
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("{key} no esta en {rev}"))
+}
+
+/// El titulo del frontmatter, reemplazado. Se escribe entre comillas simples
+/// porque un titulo lleva `:` y `` ` `` con toda naturalidad.
+fn con_titulo(texto: &str, titulo: &str) -> String {
+    let escapado = titulo.replace('\'', "''");
+    let re = regex::Regex::new(r"(?m)^title:.*$").unwrap();
+    re.replace(texto, format!("title: '{escapado}'").as_str()).to_string()
+}
+
+/// Si el cuerpo del archivo y el del proveedor dicen distinto.
+///
+/// Se compara **markdown contra markdown**, y con la misma ida que aplica el
+/// que sube: aca un item cita a otro por su archivo y alla eso es una URL.
+fn cuerpo_difiere(texto: &str, adf: &str) -> bool {
+    let Ok(alla) = worklist_core::body::adf_to_body(adf) else { return false };
+    let (_, aca) = worklist_core::body::split_frontmatter(texto);
+    alla.trim() != aca.trim()
+}
+
+/// Un commit sobre la rama de la ventana, en un worktree temporal.
+///
+/// El bare no tiene donde escribir, y la rama puede estar checkouteada del otro
+/// lado: se trabaja aparte y se mueve la ref, que es lo que hacen las otras
+/// pasadas del servidor.
+fn escribir(repo: &Path, refname: &str, escrituras: &[(String, String)]) -> Result<String> {
+    let tmp = repo.join("../.worklist-absorb");
+    let _ = std::fs::remove_dir_all(&tmp);
+    git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), refname])?;
+
+    let hecho = (|| -> Result<String> {
+        for (file, texto) in escrituras {
+            std::fs::write(tmp.join(file), texto)?;
+        }
+        // El mensaje nombra las claves: el commit lo va a leer alguien que no
+        // corrio el comando, cuando `pull` se lo baje.
+        let claves: Vec<String> = escrituras
+            .iter()
+            .filter_map(|(f, _)| crate::provider::key_of_filename(f))
+            .collect();
+        worklist_core::commit_all(&tmp, &format!("absorb: {}", claves.join(", ")))?;
+        Ok(git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
+    })();
+
+    let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    let head = hecho?;
+    git_output(repo, &["update-ref", refname, &head])?;
+    Ok(head)
+}
+
+fn ahora() -> String {
+    std::process::Command::new("date")
+        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}

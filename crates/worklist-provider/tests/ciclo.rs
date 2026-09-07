@@ -227,3 +227,62 @@ fn despues_de_bajar_no_queda_nada_sin_empujar() {
         "despues de empujar y bajar, el servidor tendria que tener todo lo mio"
     );
 }
+
+/// **La pregunta con la que empezó todo**: si cambio algo en el board y hago
+/// `pull`, ¿cambia el local?
+///
+/// Antes de `absorb` la respuesta era **no** — y peor: no se enteraba, y el
+/// push quedaba rechazado más tarde, con el trabajo ya hecho.
+#[test]
+fn lo_que_cambia_en_el_board_baja_con_el_pull() {
+    let (dir, bare, vista) = instalacion();
+
+    // Primero el ítem tiene clave, que es lo que lo vuelve comparable.
+    item(&vista, "@nuevo.task.md", Some("@o"));
+    run(&vista, &["add", "-A"]);
+    run(&vista, &["commit", "-qm", "un item nuevo"]);
+    run(&vista, &["push", "-q", "srv", "HEAD:refs/heads/secure/sprint/1"]);
+    el_servidor_resuelve(&bare);
+    el_cliente_baja(&bare, &vista);
+
+    let archivo = std::fs::read_dir(&vista)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .find(|n| n.starts_with("ACC-") && n.ends_with(".task.md"))
+        .expect("el servidor le puso clave");
+    let clave = archivo.trim_end_matches(".task.md").to_string();
+
+    // Y ahora alguien lo mueve **en el board**, no acá.
+    let provider_file = dir.path().join("provider.json");
+    std::fs::write(&provider_file, format!("{{\"{clave}\":\"in-progress\"}}")).unwrap();
+
+    // El paso 0 de `pull`: lo trae el servidor, y el cliente lo baja.
+    worklist_provider::absorb::absorb(
+        &bare,
+        "refs/heads/secure/sprint/1",
+        &worklist_provider::provider::FileProvider::new(&provider_file),
+        &worklist_provider::states::Estados::identidad(&[
+            "open".into(),
+            "in-progress".into(),
+            "done".into(),
+        ]),
+        false,
+    )
+    .unwrap();
+    worklist_provider::propagate::propagate(
+        &bare,
+        "refs/heads/secure/sprint/1",
+        &rev(&bare, "refs/heads/secure/sprint/1"),
+        BASE,
+        false,
+    )
+    .unwrap();
+    el_cliente_baja(&bare, &vista);
+
+    let texto = std::fs::read_to_string(vista.join(&archivo)).unwrap();
+    assert!(
+        texto.contains("status: in-progress"),
+        "lo que cambió en el board no bajó: {texto}"
+    );
+}

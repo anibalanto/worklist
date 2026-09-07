@@ -228,6 +228,31 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Trae a la rama de la ventana lo que el proveedor dice y el tip no.
+    ///
+    /// **Es la unica direccion que faltaba**: todo lo demas va hacia afuera. Un
+    /// cambio hecho en el board se detectaba —el push quedaba rechazado— y no
+    /// tenia por donde entrar. Es del servidor por los dos criterios, y por eso
+    /// `pull` puede traerlo sin que el cliente hable con el proveedor. Ver
+    /// `commands/absorb.md`.
+    Absorb {
+        /// La ventana. Se leen las claves de su tip.
+        #[arg(long = "ref")]
+        refname: String,
+        #[arg(long)]
+        provider_file: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        states_map: Option<PathBuf>,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        #[arg(long)]
+        account: Option<String>,
+        /// Dice que absorberia, sin escribir.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Cierra las divergencias de estado que un push ya no puede alcanzar.
     ///
     /// **No es lo mismo que la pasada de estados de `assign-keys`**, y por eso
@@ -410,6 +435,17 @@ fn main() -> Result<()> {
                 &base,
                 account.as_deref(),
                 limit,
+                dry_run,
+            )
+        }
+        Cmd::Absorb { refname, provider_file, project, states_map, base, account, dry_run } => {
+            cmd_absorb(
+                &refname,
+                provider_file,
+                project,
+                states_map,
+                &base,
+                account.as_deref(),
                 dry_run,
             )
         }
@@ -1370,6 +1406,71 @@ fn cmd_install_hooks(
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
         }
         println!("hooks/{name:<12} -> {exe}");
+    }
+    Ok(())
+}
+
+/// Trae a la ventana lo que el proveedor dice y el tip no.
+///
+/// El proveedor y el mapeo se arman igual que en `check-push`, y no por
+/// comodidad: **lo que absorbe tiene que ser exactamente lo que el otro iba a
+/// rechazar.** Dos formas de preguntar lo mismo se separan en el primer cambio.
+fn cmd_absorb(
+    refname: &str,
+    provider_file: Option<PathBuf>,
+    project: Option<String>,
+    states_map: Option<PathBuf>,
+    base: &str,
+    account: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let real = project.is_some();
+    let provider: Box<dyn worklist_provider::provider::Provider> = match (provider_file, project) {
+        (Some(f), None) => Box::new(FileProvider::new(f)),
+        (None, Some(p)) => Box::new(worklist_provider::provider::JiraProvider::new(
+            p,
+            conectar(base, account)?,
+        )),
+        _ => anyhow::bail!("hace falta --provider-file o --project, y no los dos"),
+    };
+    let repo = std::env::current_dir()?;
+    let vocabulario = worklist_provider::states::vocabulario(states_del_panorama(&repo).as_deref());
+    let estados = match states_map {
+        Some(f) => worklist_provider::states::Estados::new(
+            &vocabulario,
+            worklist_provider::states::mapeo_de_archivo(&f)?,
+        )?,
+        None if !real => worklist_provider::states::Estados::identidad(&vocabulario),
+        None => anyhow::bail!(
+            "--project necesita --states-map: sin traducir, el status del proveedor no vuelve \
+             a ningun estado del vocabulario y no se puede absorber ninguno"
+        ),
+    };
+
+    let out = worklist_provider::absorb::absorb(
+        &repo,
+        refname,
+        provider.as_ref(),
+        &estados,
+        dry_run,
+    )?;
+
+    println!("{refname}: {} clave(s)", out.claves);
+    for paso in &out.pasos {
+        match paso {
+            worklist_provider::absorb::Paso::Absorbido { key, campo, antes, ahora } => {
+                println!("  {key}  {campo}   \"{antes}\" -> \"{ahora}\"")
+            }
+            worklist_provider::absorb::Paso::Reportado { key, campo, porque } => {
+                println!("  {key}  {campo}   {porque}")
+            }
+        }
+    }
+    // Las dos cuentas, porque son decisiones distintas: lo absorbido ya esta, y
+    // lo reportado espera a alguien.
+    println!("resumen: {} absorbido(s), {} reportado(s)", out.absorbidos(), out.reportados());
+    if let Some(sha) = out.commit {
+        println!("absorb: {refname} <- el proveedor  ({})", &sha[..7.min(sha.len())]);
     }
     Ok(())
 }

@@ -25,7 +25,14 @@ pub struct View {
 /// Como quedo una vista. **`Amedias` no es un error del comando**: con `--all`
 /// las demas siguen, porque son operaciones independientes.
 enum Outcome {
-    AlDia { replantados: usize, caidos: Vec<String> },
+    AlDia {
+        replantados: usize,
+        caidos: Vec<String>,
+        /// Que dijo el proveedor, o por que no se le pudo preguntar. **Un
+        /// `pull` que no pregunto no dice "al dia" a secas**: eso seria
+        /// afirmar sobre la mitad que no miro.
+        proveedor: Option<Result<String, String>>,
+    },
     /// `--dry-run`: se dijo que pasaria, y no se toco nada. **No es "al dia"**
     /// — decirlo seria afirmar algo que esta corrida no hizo.
     Informado,
@@ -72,11 +79,11 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
 
     for v in &objetivo {
         match una(v, &bare, dry_run) {
-            Ok(Outcome::AlDia { replantados, caidos }) => {
+            Ok(Outcome::AlDia { replantados, caidos, proveedor }) => {
                 if all {
-                    println!("{}: al dia", v.branch);
+                    println!("{}: {}", v.branch, cierre(&proveedor));
                 } else {
-                    reportar(v, replantados, &caidos);
+                    reportar(v, replantados, &caidos, &proveedor);
                 }
             }
             Ok(Outcome::Informado) => {}
@@ -119,7 +126,19 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
     std::process::exit(1);
 }
 
-fn reportar(v: &View, replantados: usize, caidos: &[String]) {
+/// Como cierra una vista. **Nunca "al dia" a secas si no se pregunto al
+/// proveedor**: la palabra abarca las dos mitades, y decirla habiendo mirado
+/// una es el mismo defecto que `sin verificar` contra `coincide`.
+fn cierre(proveedor: &Option<Result<String, String>>) -> String {
+    match proveedor {
+        Some(Ok(resumen)) if resumen.starts_with("0 absorbido") => "al dia".into(),
+        Some(Ok(resumen)) => format!("al dia con git; el proveedor: {resumen}"),
+        Some(Err(porque)) => format!("al dia con git; al proveedor no se le pudo preguntar ({porque})"),
+        None => "al dia con git; el proveedor no se pregunto".into(),
+    }
+}
+
+fn reportar(v: &View, replantados: usize, caidos: &[String], proveedor: &Option<Result<String, String>>) {
     if replantados > 0 {
         println!("  {replantados} commit(s) replantado(s)");
     }
@@ -128,7 +147,7 @@ fn reportar(v: &View, replantados: usize, caidos: &[String]) {
     for linea in caidos {
         println!("  dejado caer: {linea}");
     }
-    println!("{}: al dia", v.branch);
+    println!("{}: {}", v.branch, cierre(proveedor));
 }
 
 /// Los tres pasos, sobre una vista.
@@ -174,6 +193,13 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
         return Ok(Outcome::Informado);
     }
 
+    // Paso 0 — lo que cambio en el board, adentro de la ventana. **No lo hace
+    // el cliente**: `absorb` es del servidor, escribe en la rama, y de ahi baja
+    // como cualquier otra cosa que el servidor haya escrito. Es lo que vuelve
+    // cierta la palabra "al dia" — sin esto, `pull` pone al dia la mitad de lo
+    // que puede estar viejo y lo dice igual.
+    let proveedor = absorber(bare, &branch_ref);
+
     // Paso 1 — el corte de hoy, donde esta el panorama. Es del servidor, y no
     // hace falta ningun canal porque el bare esta en la misma maquina. El dia
     // que sea un GitLab, esto es lo primero que se rompe.
@@ -208,14 +234,14 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     let (contiene, _) =
         try_git(&v.path, &["merge-base", "--is-ancestor", &tip, &antes])?;
     if contiene {
-        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new() });
+        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: None });
     }
     // Nada sin empujar: el corte nuevo trae todo mi trabajo, y replantarlo
     // seria pedirle a git que redescubra por patch-id algo que ya se sabe. Y
     // no lo puede contestar: arriba el cuerpo quedo en su forma canonica.
     if todo_subido {
         git_output(&v.path, &["reset", "--hard", "--quiet", &tip])?;
-        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new() });
+        return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new(), proveedor: None });
     }
 
     // El replante lo hace `core`, que es donde se puede probar contra un
@@ -228,7 +254,38 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
         return Ok(Outcome::Amedias { linea, files });
     }
     let (replantados, caidos) = (r.replantados, r.caidos);
-    Ok(Outcome::AlDia { replantados, caidos })
+    Ok(Outcome::AlDia { replantados, caidos, proveedor: Some(proveedor) })
+}
+
+/// El paso 0: lo que cambio en el board, adentro de la ventana.
+///
+/// **Que no se pueda preguntar no frena el resto.** Poner al dia lo de git vale
+/// igual, y quedarse sin hacerlo porque el proveedor no contesto seria cambiar
+/// una respuesta incompleta por ninguna. Se devuelve lo que paso para que la
+/// salida lo diga — un `pull` que no pregunto **no dice "al dia" a secas**.
+fn absorber(bare: &Path, branch_ref: &str) -> Result<String, String> {
+    let Some(config) = crate::status::args_del_hook(bare) else {
+        return Err("el servidor no tiene hooks instalados".into());
+    };
+    let out = std::process::Command::new("worklist-server")
+        .arg("absorb")
+        .args(["--ref", branch_ref])
+        .args(&config)
+        .current_dir(bare)
+        .output()
+        .map_err(|_| "no encuentro `worklist-server`".to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("").to_string());
+    }
+    let texto = String::from_utf8_lossy(&out.stdout);
+    Ok(texto
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("resumen:"))
+        .unwrap_or("")
+        .trim_start_matches("resumen:")
+        .trim()
+        .to_string())
 }
 
 /// El paso 1: se lo pide al servidor, que es de quien es.

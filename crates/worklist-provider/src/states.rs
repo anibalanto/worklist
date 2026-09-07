@@ -96,6 +96,24 @@ impl Estados {
     pub fn declarados(&self) -> impl Iterator<Item = &str> {
         self.mapeo.keys().map(|s| s.as_str())
     }
+
+    /// La vuelta: que estados del proyecto podrian estar detras de este status
+    /// del proveedor.
+    ///
+    /// **Devuelve todos los candidatos y no uno**, porque el inverso no es una
+    /// funcion — es lo que el comentario de `destino` ya decia, dicho ahora en
+    /// un tipo. Medido en esta instalacion: `done` y `dropped` mapean los dos a
+    /// `Finalizada`, asi que un item que el board dejo ahi tiene dos vueltas.
+    ///
+    /// Quien absorbe **no elige**: con mas de un candidato reporta, porque
+    /// elegir es inventar. Ver `commands/absorb.md`.
+    pub fn desde(&self, status_del_proveedor: &str) -> Vec<&str> {
+        self.mapeo
+            .iter()
+            .filter(|(_, d)| d.status() == status_del_proveedor)
+            .map(|(estado, _)| estado.as_str())
+            .collect()
+    }
 }
 
 /// El mapeo de la instalacion, en JSON al lado de `provider.json`.

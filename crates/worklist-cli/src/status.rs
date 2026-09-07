@@ -151,7 +151,7 @@ fn una(v: &crate::pull::View, bare: &Path, verify: bool) -> Result<bool> {
 ///
 /// Es una costura, y se sabe: la configuracion del proveedor no tiene casa
 /// propia, asi que se lee del unico lugar donde hoy es autoritativa.
-fn args_del_hook(bare: &Path) -> Option<Vec<String>> {
+pub fn args_del_hook(bare: &Path) -> Option<Vec<String>> {
     let hook = std::fs::read_to_string(bare.join("hooks/pre-receive")).ok()?;
     let linea = hook.lines().find(|l| l.contains("check-push"))?;
     let mut args: Vec<String> = Vec::new();
@@ -177,10 +177,19 @@ fn preguntarle_al_proveedor(bare: &Path, branch_ref: &str) -> Result<Linea> {
     // El proveedor de prueba **no informa titulo ni cuerpo**, asi que decir
     // "coincide" con el seria afirmar sobre dos campos que nadie comparo.
     let de_prueba = config.iter().any(|a| a == "--provider-file");
+    // **Se pregunta con `absorb --dry-run` y no con `check-push --dry-run`.**
+    // Es la misma llamada al proveedor y el reporte dice mas: separa lo que se
+    // absorbe solo de lo que necesita a una persona. Y sobre todo es **el mismo
+    // codigo que `pull` va a ejecutar** — una copia con la misma intencion
+    // empieza igual y se separa despues.
+    //
+    // `--dry-run` porque `status` no escribe nada. Un comando que te dice donde
+    // estas parado y ademas te mueve no se puede correr para averiguar.
     let out = std::process::Command::new("worklist-server")
-        .arg("check-push")
+        .arg("absorb")
+        .args(["--ref", branch_ref])
         .args(&config)
-        .args(["--dry-run", "--ref", branch_ref])
+        .arg("--dry-run")
         .current_dir(bare)
         .output();
     let Ok(out) = out else {
@@ -200,7 +209,7 @@ fn preguntarle_al_proveedor(bare: &Path, branch_ref: &str) -> Result<Linea> {
     // que mantener de acuerdo.
     let texto = String::from_utf8_lossy(&out.stdout);
     let resumen = texto.lines().rev().find(|l| l.starts_with("resumen:")).unwrap_or("").to_string();
-    if resumen.contains("status 0") && resumen.contains("titulo 0") && resumen.contains("cuerpo 0") {
+    if resumen.contains("0 absorbido(s), 0 reportado(s)") {
         // Con el de prueba, "coincide" seria afirmar sobre el titulo y el
         // cuerpo, que no se compararon. Se dice cuanto se miro.
         if de_prueba {
