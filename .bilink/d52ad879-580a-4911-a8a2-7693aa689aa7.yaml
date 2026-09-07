@@ -4,9 +4,9 @@ endpoint:
     link: path <
     accepted:
     - agree:
-      - test
+      - Anibal
       link: capture ff1e92dfbe5ae8e06870792d763a0164
-      hash: 5b2d60c0885f30e90fb1e0286f44585e9d00160fd1e72fa117ae57eaeaddce42
+      hash: 4a7acb10575a76b242c61f52ac6fb4c7cd51fc7fcadd9945373c927fc72f5510
   1:
     link: capture 81a6af6cab367ec8cf01a24cb2c47bf5
     n:
