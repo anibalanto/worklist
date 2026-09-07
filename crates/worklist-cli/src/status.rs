@@ -209,6 +209,14 @@ fn preguntarle_al_proveedor(bare: &Path, branch_ref: &str) -> Result<Linea> {
     // que mantener de acuerdo.
     let texto = String::from_utf8_lossy(&out.stdout);
     let resumen = texto.lines().rev().find(|l| l.starts_with("resumen:")).unwrap_or("").to_string();
+    // La coma importa: `"20 sin informar"` **contiene** `"0 sin informar"`.
+    let nadie_informo = !resumen.contains(", 0 sin informar");
+    if nadie_informo {
+        return Ok(Linea::Sin {
+            dice: "el proveedor no informo".into(),
+            hacer: resumen.trim_start_matches("resumen:").trim().to_string(),
+        });
+    }
     if resumen.contains("0 absorbido(s), 0 reportado(s)") {
         // Con el de prueba, "coincide" seria afirmar sobre el titulo y el
         // cuerpo, que no se compararon. Se dice cuanto se miro.

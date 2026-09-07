@@ -1464,11 +1464,34 @@ fn cmd_absorb(
             worklist_provider::absorb::Paso::Reportado { key, campo, porque } => {
                 println!("  {key}  {campo}   {porque}")
             }
+            // Van juntas y con su numero, mas abajo: una por linea sobre una
+            // ventana entera es un volcado.
+            worklist_provider::absorb::Paso::SinInformar { .. } => {}
         }
     }
     // Las dos cuentas, porque son decisiones distintas: lo absorbido ya esta, y
     // lo reportado espera a alguien.
-    println!("resumen: {} absorbido(s), {} reportado(s)", out.absorbidos(), out.reportados());
+    // Las que nadie informo van juntas y con su numero: una por linea sobre
+    // una ventana entera es un volcado, y omitirlas es decir que coinciden.
+    if out.sin_informar() > 0 {
+        let cuales: Vec<&str> = out
+            .pasos
+            .iter()
+            .filter_map(|p| match p {
+                worklist_provider::absorb::Paso::SinInformar { key } => Some(key.as_str()),
+                _ => None,
+            })
+            .take(5)
+            .collect();
+        let mas = if out.sin_informar() > 5 { ", …" } else { "" };
+        println!("  sin informar ({}): {}{mas}", out.sin_informar(), cuales.join(", "));
+    }
+    println!(
+        "resumen: {} absorbido(s), {} reportado(s), {} sin informar",
+        out.absorbidos(),
+        out.reportados(),
+        out.sin_informar()
+    );
     if let Some(sha) = out.commit {
         println!("absorb: {refname} <- el proveedor  ({})", &sha[..7.min(sha.len())]);
     }

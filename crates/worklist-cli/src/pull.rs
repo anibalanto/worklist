@@ -131,7 +131,15 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
 /// una es el mismo defecto que `sin verificar` contra `coincide`.
 fn cierre(proveedor: &Option<Result<String, String>>) -> String {
     match proveedor {
-        Some(Ok(resumen)) if resumen.starts_with("0 absorbido") => "al dia".into(),
+        // **"al dia" sólo si además el proveedor informó todo.** Con la
+        // instalación apuntando a un proveedor de prueba vacío, "0 absorbido,
+        // 0 reportado" es cierto y no significa nada: nadie miró.
+        Some(Ok(resumen))
+            if resumen.starts_with("0 absorbido")
+                && resumen.contains(", 0 sin informar") =>
+        {
+            "al dia".into()
+        }
         Some(Ok(resumen)) => format!("al dia con git; el proveedor: {resumen}"),
         Some(Err(porque)) => format!("al dia con git; al proveedor no se le pudo preguntar ({porque})"),
         None => "al dia con git; el proveedor no se pregunto".into(),

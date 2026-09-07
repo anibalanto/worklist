@@ -234,3 +234,37 @@ fn un_campo_que_el_proveedor_no_informa_no_se_absorbe() {
     assert_eq!(out.absorbidos(), 0, "{:?}", out.pasos);
     assert_eq!(out.reportados(), 0, "reportó sobre campos que nadie informó: {:?}", out.pasos);
 }
+
+/// **Cero absorbidos sobre veinte claves no es "todo coincide".**
+///
+/// Es el mismo defecto que `sin verificar` contra `coincide`, y lo cometió este
+/// comando: con una instalación apuntando a un proveedor de prueba vacío,
+/// `absorb` cerró con `0 absorbido, 0 reportado` sobre 20 claves que nadie
+/// informó — y se leyó como que estaba todo bien.
+#[test]
+fn lo_que_el_proveedor_no_informa_se_cuenta_aparte() {
+    let (_d, r) = ventana();
+    let dir = tempfile::tempdir().unwrap();
+    let archivo = dir.path().join("provider.json");
+    // El proveedor de prueba **vacío**, que es el de la instalación de hoy.
+    std::fs::write(&archivo, "{}").unwrap();
+
+    let out = absorb(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &FileProvider::new(&archivo),
+        &Estados::identidad(&["open".into(), "in-progress".into()]),
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(out.claves, 2);
+    assert_eq!(out.absorbidos(), 0);
+    assert_eq!(out.reportados(), 0);
+    assert_eq!(
+        out.sin_informar(),
+        2,
+        "las callo, y callarlas es decir que coinciden: {:?}",
+        out.pasos
+    );
+}

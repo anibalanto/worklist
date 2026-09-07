@@ -26,6 +26,14 @@ pub enum Paso {
     /// Difiere y **no se toca**, con el motivo. Reportar de mas es ruido;
     /// absorber de mas es escribir.
     Reportado { key: String, campo: &'static str, porque: String },
+    /// El proveedor **no informo** esta clave.
+    ///
+    /// No es que coincida: es que no se vio. Callarlo convierte *"no se pudo
+    /// preguntar"* en *"esta todo bien"*, que es el mismo defecto de forma que
+    /// `sin verificar` contra `coincide` — y con una instalacion apuntando a un
+    /// proveedor de prueba vacio, **son todas**. Medido el 2026-09-07: absorb
+    /// cerro con `0 absorbido, 0 reportado` sobre 20 claves que nadie informo.
+    SinInformar { key: String },
 }
 
 #[derive(Debug, Default)]
@@ -42,6 +50,12 @@ impl Absorbido {
     }
     pub fn reportados(&self) -> usize {
         self.pasos.iter().filter(|p| matches!(p, Paso::Reportado { .. })).count()
+    }
+    /// Las que el proveedor no informo. **Es la cuenta que no puede faltar**:
+    /// cero absorbidos y cero reportados sobre veinte claves se lee igual que
+    /// "todo coincide", y no es lo mismo.
+    pub fn sin_informar(&self) -> usize {
+        self.pasos.iter().filter(|p| matches!(p, Paso::SinInformar { .. })).count()
     }
 }
 
@@ -74,7 +88,16 @@ pub fn absorb(
 
     let mut escrituras: Vec<(String, String)> = Vec::new();
     for key in &claves {
-        let Some(snap) = vivo.get(key) else { continue };
+        let Some(snap) = vivo.get(key) else {
+            out.pasos.push(Paso::SinInformar { key: key.clone() });
+            continue;
+        };
+        // Y una clave informada **sin ningun campo** es lo mismo: el de prueba
+        // solo lleva status, asi que sobre titulo y cuerpo no vio nada.
+        if snap.status.is_none() && snap.summary.is_none() && snap.description.is_none() {
+            out.pasos.push(Paso::SinInformar { key: key.clone() });
+            continue;
+        }
         let Ok(file) = archivo_de(repo, refname, key) else { continue };
         let Ok(texto) = git_output(repo, &["show", &format!("{refname}:{file}")]) else { continue };
         let mut texto = texto;
