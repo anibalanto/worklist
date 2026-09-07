@@ -124,10 +124,48 @@ fn una(v: &crate::pull::View, bare: &Path, verify: bool) -> Result<bool> {
     Ok([&servidor, &empuje, &local].iter().any(|l| matches!(l, Linea::Atender { .. })))
 }
 
+/// Contra que proveedor pregunta esta instalacion, leido del hook que el
+/// servidor genero.
+///
+/// **No se inventan los argumentos.** Cual es el proveedor, cual el mapeo de
+/// estados y con que cuenta se autentica es configuracion de la instalacion, y
+/// hoy vive en `hooks/pre-receive` — que `install-hooks` escribe. Duplicarla
+/// aca la volveria una segunda fuente que puede diferir de la que realmente
+/// rechaza un push, y entonces `--verify` mediria algo que no es lo que va a
+/// pasar.
+///
+/// Es una costura, y se sabe: la configuracion del proveedor no tiene casa
+/// propia, asi que se lee del unico lugar donde hoy es autoritativa.
+fn args_del_hook(bare: &Path) -> Option<Vec<String>> {
+    let hook = std::fs::read_to_string(bare.join("hooks/pre-receive")).ok()?;
+    let linea = hook.lines().find(|l| l.contains("check-push"))?;
+    let mut args: Vec<String> = Vec::new();
+    let mut vistos = linea.split_whitespace().skip_while(|t| *t != "check-push").skip(1);
+    while let Some(t) = vistos.next() {
+        // `--stdin` es el protocolo del hook: acá no llega ningún push.
+        if t == "--stdin" {
+            continue;
+        }
+        args.push(t.to_string());
+    }
+    Some(args)
+}
+
 /// Lo caro, y lo hace el servidor.
 fn preguntarle_al_proveedor(bare: &Path, branch_ref: &str) -> Result<Linea> {
+    let Some(config) = args_del_hook(bare) else {
+        return Ok(Linea::Sin {
+            dice: "no se pudo preguntar".into(),
+            hacer: "el servidor no tiene hooks instalados".into(),
+        });
+    };
+    // El proveedor de prueba **no informa titulo ni cuerpo**, asi que decir
+    // "coincide" con el seria afirmar sobre dos campos que nadie comparo.
+    let de_prueba = config.iter().any(|a| a == "--provider-file");
     let out = std::process::Command::new("worklist-server")
-        .args(["check-push", "--dry-run", "--ref", branch_ref])
+        .arg("check-push")
+        .args(&config)
+        .args(["--dry-run", "--ref", branch_ref])
         .current_dir(bare)
         .output();
     let Ok(out) = out else {
@@ -148,7 +186,16 @@ fn preguntarle_al_proveedor(bare: &Path, branch_ref: &str) -> Result<Linea> {
     let texto = String::from_utf8_lossy(&out.stdout);
     let resumen = texto.lines().rev().find(|l| l.starts_with("resumen:")).unwrap_or("").to_string();
     if resumen.contains("status 0") && resumen.contains("titulo 0") && resumen.contains("cuerpo 0") {
-        Ok(Linea::Bien("coincide".into()))
+        // Con el de prueba, "coincide" seria afirmar sobre el titulo y el
+        // cuerpo, que no se compararon. Se dice cuanto se miro.
+        if de_prueba {
+            Ok(Linea::Sin {
+                dice: "coincide el status".into(),
+                hacer: "el titulo y el cuerpo no se comparan con el proveedor de prueba".into(),
+            })
+        } else {
+            Ok(Linea::Bien("coincide".into()))
+        }
     } else if resumen.is_empty() {
         Ok(Linea::Sin { dice: "no informo".into(), hacer: String::new() })
     } else {
