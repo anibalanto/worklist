@@ -31,6 +31,15 @@ enum Cmd {
         /// campo, y compararlos sin traducir rechaza todas las ventanas.
         #[arg(long)]
         states_map: Option<PathBuf>,
+        /// Base del proveedor. Con `--project` se le piden por REST las
+        /// transiciones que el workflow admite, que es lo que decide un rechazo
+        /// por regla.
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        /// El email de la cuenta con la que se habla por REST. Ver `--account`
+        /// de `install-hooks`.
+        #[arg(long)]
+        account: Option<String>,
         /// Lee `<viejo> <nuevo> <ref>` por linea — el protocolo de pre-receive.
         #[arg(long)]
         stdin: bool,
@@ -54,6 +63,12 @@ enum Cmd {
         /// Base del proveedor, para traducir los links a otros items.
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
+        /// El email de la cuenta con la que se habla por REST. **No es un
+        /// secreto y por eso no viaja con el token**: es un dato de la
+        /// instalacion, del mismo lado que la base y el id del board. Ver
+        /// ADR-0001 § 5.
+        #[arg(long)]
+        account: Option<String>,
         /// El mapeo de estados de esta instalacion, en JSON. Sin el, los
         /// estados no viajan: no hay con que traducirlos, y **no viajar es
         /// mejor que viajar mal**. Se avisa, no se falla — el resto de las
@@ -93,6 +108,12 @@ enum Cmd {
         /// Base del proveedor, para traducir los links a otros items.
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
+        /// El email de la cuenta con la que se habla por REST. **No es un
+        /// secreto y por eso no viaja con el token**: es un dato de la
+        /// instalacion, del mismo lado que la base y el id del board. Ver
+        /// ADR-0001 § 5.
+        #[arg(long)]
+        account: Option<String>,
         /// Crea solo los primeros N y para. Un lote no necesita ser una
         /// transaccion —de eso ya se ocupa el ancla— sino un corte: noventa y
         /// un issues en un board real conviene verlos a la decima.
@@ -132,6 +153,14 @@ enum Cmd {
         /// Sobre que rama. Por defecto el panorama, que es donde vive todo.
         #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
         refname: String,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        /// El email de la cuenta con la que se habla por REST. **No es un
+        /// secreto y por eso no viaja con el token**: es un dato de la
+        /// instalacion, del mismo lado que la base y el id del board. Ver
+        /// ADR-0001 § 5.
+        #[arg(long)]
+        account: Option<String>,
         #[arg(long)]
         dry_run: bool,
     },
@@ -162,6 +191,12 @@ enum Cmd {
         states_map: Option<PathBuf>,
         #[arg(long, default_value = "https://lamansys.atlassian.net")]
         base: String,
+        /// El email de la cuenta con la que se habla por REST. **No es un
+        /// secreto y por eso no viaja con el token**: es un dato de la
+        /// instalacion, del mismo lado que la base y el id del board. Ver
+        /// ADR-0001 § 5.
+        #[arg(long)]
+        account: Option<String>,
         /// Sobrescribe un hook que ya existe.
         #[arg(long)]
         force: bool,
@@ -177,6 +212,14 @@ enum Cmd {
         r#type: String,
         #[arg(long)]
         source: String,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        /// El email de la cuenta con la que se habla por REST. **No es un
+        /// secreto y por eso no viaja con el token**: es un dato de la
+        /// instalacion, del mismo lado que la base y el id del board. Ver
+        /// ADR-0001 § 5.
+        #[arg(long)]
+        account: Option<String>,
         titulo: String,
         #[arg(long)]
         dry_run: bool,
@@ -196,8 +239,8 @@ enum ProviderCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::CheckPush { provider_file, project, states_map, stdin } => {
-            cmd_check_push(provider_file, project, states_map, stdin)
+        Cmd::CheckPush { provider_file, project, states_map, base, account, stdin } => {
+            cmd_check_push(provider_file, project, states_map, &base, account.as_deref(), stdin)
         }
         Cmd::Provider { sub: ProviderCmd::SetStatus { provider_file, clave, status } } => {
             let provider = FileProvider::new(provider_file);
@@ -208,14 +251,32 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::AssignKeys { project, board, base, states_map, stdin, window, all_windows, dry_run } => {
-            cmd_assign_keys(project, board, base, states_map, stdin, &window, all_windows, dry_run)
+        Cmd::AssignKeys {
+            project,
+            board,
+            base,
+            account,
+            states_map,
+            stdin,
+            window,
+            all_windows,
+            dry_run,
+        } => cmd_assign_keys(
+            project,
+            board,
+            base,
+            account.as_deref(),
+            states_map,
+            stdin,
+            &window,
+            all_windows,
+            dry_run,
+        ),
+        Cmd::Bootstrap { project, board_id, refname, base, account, limit, dry_run } => {
+            cmd_bootstrap(project, board_id, refname, base, account.as_deref(), limit, dry_run)
         }
-        Cmd::Bootstrap { project, board_id, refname, base, limit, dry_run } => {
-            cmd_bootstrap(project, board_id, refname, base, limit, dry_run)
-        }
-        Cmd::Reconcile { project, refname, dry_run } => {
-            cmd_reconcile(project, refname, dry_run)
+        Cmd::Reconcile { project, refname, base, account, dry_run } => {
+            cmd_reconcile(project, refname, &base, account.as_deref(), dry_run)
         }
         Cmd::Propagate { stdin, window, all_windows, base, dry_run } => {
             cmd_propagate(stdin, &window, all_windows, &base, dry_run)
@@ -227,6 +288,7 @@ fn main() -> Result<()> {
             provider_file,
             states_map,
             base,
+            account,
             force,
             dry_run,
         } => {
@@ -237,14 +299,43 @@ fn main() -> Result<()> {
                 provider_file.as_deref(),
                 states_map.as_deref(),
                 &base,
+                account.as_deref(),
                 force,
                 dry_run,
             )
         }
-        Cmd::CreateOrFind { project, r#type, source, titulo, dry_run } => {
-            cmd_create_or_find(project, r#type, source, titulo, dry_run)
+        Cmd::CreateOrFind { project, r#type, source, base, account, titulo, dry_run } => {
+            cmd_create_or_find(project, r#type, source, &base, account.as_deref(), titulo, dry_run)
         }
     }
+}
+
+/// La conexion al proveedor real: la credencial de los tres transportes
+/// verificada, y la direccion de REST.
+///
+/// **En un solo lugar y no en cada comando.** El chequeo de credencial ya
+/// estaba centralizado; lo que se agrega es que su resultado ahora se usa —
+/// antes `preflight` se llamaba por su efecto y se tiraba lo que devolvia,
+/// porque los dos CLIs leen su credencial por su cuenta. REST no: la necesita
+/// en la mano.
+fn conectar(base: &str, account: Option<&str>) -> Result<worklist_provider::api::Api> {
+    let creds = worklist_provider::port::preflight(account.unwrap_or_default())?;
+    Ok(worklist_provider::api::Api::new(base, creds))
+}
+
+/// La conexion de una corrida que **puede** no hablar.
+///
+/// `--dry-run` no le pide nada al proveedor, asi que tampoco le pide
+/// credencial a quien la corre: el plan sale del arbol. Ver `Api::mudo`.
+fn conectar_salvo_en_seco(
+    base: &str,
+    account: Option<&str>,
+    dry_run: bool,
+) -> Result<worklist_provider::api::Api> {
+    if dry_run {
+        return Ok(worklist_provider::api::Api::mudo(base));
+    }
+    conectar(base, account)
 }
 
 /// Busca por titulo antes de crear, para que un reintento no duplique.
@@ -258,6 +349,8 @@ fn cmd_create_or_find(
     project: String,
     item_type: String,
     source: String,
+    base: &str,
+    account: Option<&str>,
     titulo: String,
     dry_run: bool,
 ) -> Result<()> {
@@ -266,8 +359,7 @@ fn cmd_create_or_find(
         println!("{}", dry_run_plan(&project, &item_type, &titulo, &description)?);
         return Ok(());
     }
-    worklist_provider::port::preflight()?;
-    let board = JiraBoard::new(project);
+    let board = JiraBoard::new(project, conectar(base, account)?);
     // Sin `--parent`: este comando resuelve un item suelto, y la jerarquia la
     // calcula `assign-keys` sobre la ventana entera.
     let outcome = board.create_or_find(&titulo, &item_type, &description, None)?;
@@ -279,6 +371,7 @@ fn cmd_assign_keys(
     project: String,
     board_id: String,
     base: String,
+    account: Option<&str>,
     states_map: Option<PathBuf>,
     stdin: bool,
     windows: &[String],
@@ -288,11 +381,8 @@ fn cmd_assign_keys(
     // Antes de mirar el arbol: sin credencial, la mitad de abajo de la tabla
     // del puerto no existe, y enterarse con una ventana a medio resolver es la
     // peor forma. `--dry-run` no habla con nadie, asi que no la pide.
-    if !dry_run {
-        worklist_provider::port::preflight()?;
-    }
     let repo = std::env::current_dir()?;
-    let board = JiraBoard::new(project);
+    let board = JiraBoard::new(project, conectar_salvo_en_seco(&base, account, dry_run)?);
 
     let lines = if all_windows || !windows.is_empty() {
         window_lines(&repo, windows, all_windows)?
@@ -374,12 +464,14 @@ fn cmd_assign_keys(
                         worklist_provider::board::Transicion::YaEstaba => {}
                         worklist_provider::board::Transicion::Rechazada { motivo, disponibles } => {
                             println!("  estado: {} NO se movio a {} — {motivo}", m.key, m.destino);
-                            match disponibles {
-                                Some(d) if !d.is_empty() => {
-                                    println!("          disponibles: {}", d.join(", "))
-                                }
-                                Some(_) => println!("          el workflow no ofrece ninguna"),
-                                None => println!("          no se pudieron listar las disponibles"),
+                            // Siempre hay lista, y puede estar vacia: listar es
+                            // lo que precede al intento, asi que un rechazo que
+                            // exista ya miro. "No se pudieron listar" ya no es
+                            // un caso — si no se pudo, no hubo intento.
+                            if disponibles.is_empty() {
+                                println!("          el workflow no ofrece ninguna");
+                            } else {
+                                println!("          disponibles: {}", disponibles.join(", "));
                             }
                         }
                     }
@@ -450,14 +542,12 @@ fn cmd_bootstrap(
     board_id: String,
     refname: String,
     base: String,
+    account: Option<&str>,
     limit: Option<usize>,
     dry_run: bool,
 ) -> Result<()> {
-    if !dry_run {
-        worklist_provider::port::preflight()?;
-    }
     let repo = std::env::current_dir()?;
-    let board = JiraBoard::new(project);
+    let board = JiraBoard::new(project, conectar_salvo_en_seco(&base, account, dry_run)?);
     let Some(r) = worklist_provider::assign::bootstrap(&repo, &refname, &base, &board, &board_id, limit, dry_run)? else {
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
@@ -520,10 +610,15 @@ fn cmd_bootstrap(
 }
 
 /// Adopta lo que ya existe del otro lado, sin crear nada.
-fn cmd_reconcile(project: String, refname: String, dry_run: bool) -> Result<()> {
-    worklist_provider::port::preflight()?;
+fn cmd_reconcile(
+    project: String,
+    refname: String,
+    base: &str,
+    account: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
     let repo = std::env::current_dir()?;
-    let board = JiraBoard::new(project);
+    let board = JiraBoard::new(project, conectar_salvo_en_seco(base, account, dry_run)?);
     let Some(r) = worklist_provider::assign::reconcile(&repo, &refname, &board, dry_run)? else {
         println!("{refname}: no hay ningun item sin clave");
         return Ok(());
@@ -734,6 +829,8 @@ fn cmd_check_push(
     provider_file: Option<PathBuf>,
     project: Option<String>,
     states_map: Option<PathBuf>,
+    base: &str,
+    account: Option<&str>,
     stdin: bool,
 ) -> Result<()> {
     // Uno de los dos, y el de prueba solo informa el status: con el, el cuerpo
@@ -741,10 +838,10 @@ fn cmd_check_push(
     let real = project.is_some();
     let provider: Box<dyn worklist_provider::provider::Provider> = match (provider_file, project) {
         (Some(f), None) => Box::new(FileProvider::new(f)),
-        (None, Some(p)) => {
-            worklist_provider::port::preflight()?;
-            Box::new(worklist_provider::provider::JiraProvider::new(p))
-        }
+        (None, Some(p)) => Box::new(worklist_provider::provider::JiraProvider::new(
+            p,
+            conectar(base, account)?,
+        )),
         _ => anyhow::bail!("hace falta --provider-file o --project, y no los dos"),
     };
     let provider = provider.as_ref();
@@ -930,6 +1027,7 @@ fn cmd_install_hooks(
     provider_file: Option<&std::path::Path>,
     states_map: Option<&std::path::Path>,
     base: &str,
+    account: Option<&str>,
     force: bool,
     dry_run: bool,
 ) -> Result<()> {
@@ -951,9 +1049,16 @@ fn cmd_install_hooks(
         Some(f) => format!(" --states-map {}", f.display()),
         None => String::new(),
     };
+    // El email de la cuenta va a los dos hooks porque los dos hablan por REST:
+    // el `pre-receive` para preguntar que transiciones admite el workflow, el
+    // `post-receive` para moverlas. Ver ADR-0001 § 5.
+    let cuenta = match account {
+        Some(a) => format!(" --account {a}"),
+        None => String::new(),
+    };
     let contra = match provider_file {
         Some(f) => format!("--provider-file {}", f.display()),
-        None => format!("--project {project}{mapeo}"),
+        None => format!("--project {project}{mapeo} --base {base}{cuenta}"),
     };
     let nota = match (provider_file, states_map) {
         (Some(_), _) => concat!(
@@ -967,6 +1072,18 @@ fn cmd_install_hooks(
         ),
         (None, Some(_)) => "",
     };
+    // Sin `--account` el arranque se niega y dice cual credencial falta, que es
+    // lo mismo que ya pasa sin token. Se avisa igual al instalar: enterarse al
+    // primer push es enterarse tarde.
+    let falta_cuenta = if provider_file.is_none() && account.is_none() {
+        concat!(
+            "# Sin --account: la API REST autentica con el par email mas token,\n",
+            "# asi que el arranque se va a negar diciendo que falta el email.\n",
+        )
+    } else {
+        ""
+    };
+    let nota = format!("{nota}{falta_cuenta}");
     let pre = format!(
         "#!/bin/sh\n\
          # generado por worklist-server install-hooks — no editar\n\
@@ -981,12 +1098,14 @@ fn cmd_install_hooks(
          #\n\
          # La propagacion al panorama va adentro de assign-keys, al final.\n\
          #\n\
-         # El token llega por el entorno de quien empuja: jira-cli lo lee de\n\
-         # JIRA_API_TOKEN, y un hook hereda el entorno del proceso que lo\n\
-         # dispara — asi que el secreto no vive en disco, y la contra es que un\n\
-         # push desde una sesion sin exportarlo falla en el arranque, diciendo\n\
-         # cual credencial falta.\n\
-         exec {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}{mapeo}\n"
+         # El token llega por el entorno de quien empuja: jira-cli y la API\n\
+         # REST lo leen de JIRA_API_TOKEN, y un hook hereda el entorno del\n\
+         # proceso que lo dispara — asi que el secreto no vive en disco, y la\n\
+         # contra es que un push desde una sesion sin exportarlo falla en el\n\
+         # arranque, diciendo cual credencial falta.\n\
+         #\n\
+         # El email si vive aca: no es secreto, y es de la instalacion.\n\
+         exec {exe} assign-keys --stdin --project {project} --board {board_id} --base {base}{cuenta}{mapeo}\n"
     );
 
     for (name, body) in [("pre-receive", &pre), ("post-receive", &post)] {

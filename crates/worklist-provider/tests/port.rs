@@ -21,7 +21,13 @@ fn el_reparto_es_el_de_la_spec() {
     // uno es meterle un issue y enumerar los del board.
     assert_eq!(Op::CreateSprint.transport(), Transport::Acli);
     assert_eq!(Op::SprintItems.transport(), Transport::Acli);
+    // Las dos de estado, por REST: **ningun CLI puede listar las transiciones
+    // de un issue**, y sin listar no hay id con que pedir la transicion.
+    for op in [Op::Transition, Op::TransitionsOf] {
+        assert_eq!(op.transport(), Transport::Api, "{op:?} deberia ir por la API");
+    }
 }
+
 
 /// Un fallo se lee igual venga de donde venga: la clave, el transporte que se
 /// quejo y el motivo. Es lo que evita que agregar un transporte multiplique
@@ -43,27 +49,40 @@ fn un_fallo_sin_clave_no_inventa_una() {
     assert!(s.contains("nope"), "{s}");
 }
 
-/// Hay **dos** formas de estar mal configurado, y decir "falta la credencial"
-/// manda a mirar la que ya estaba bien.
+/// Hay **tres** formas de estar mal configurado, y decir "falta la credencial"
+/// manda a mirar las dos que ya estaban bien.
 #[test]
-fn el_mensaje_dice_cual_de_las_dos_falta() {
-    let solo_acli = missing(false, "un-token");
+fn el_mensaje_dice_cual_de_las_tres_falta() {
+    let solo_acli = missing(false, "un-token", "yo@ejemplo.com");
     assert_eq!(solo_acli.len(), 1);
     assert!(solo_acli[0].starts_with("acli:"), "{solo_acli:?}");
 
-    let solo_token = missing(true, "");
+    let solo_token = missing(true, "", "yo@ejemplo.com");
     assert_eq!(solo_token.len(), 1);
-    assert!(solo_token[0].starts_with("jira-cli:"), "{solo_token:?}");
     assert!(solo_token[0].contains(TOKEN_ENV), "y dice como se llama: {solo_token:?}");
 
-    assert_eq!(missing(false, "").len(), 2, "las dos juntas se dicen las dos");
-    assert!(missing(true, "un-token").is_empty());
+    let solo_cuenta = missing(true, "un-token", "");
+    assert_eq!(solo_cuenta.len(), 1);
+    assert!(solo_cuenta[0].contains("--account"), "y dice de donde sale: {solo_cuenta:?}");
+
+    assert_eq!(missing(false, "", "").len(), 3, "las tres juntas se dicen las tres");
+    assert!(missing(true, "un-token", "yo@ejemplo.com").is_empty());
+}
+
+/// El token y el email faltan por motivos distintos y se arreglan en lugares
+/// distintos —uno es del entorno de quien empuja, el otro de como se
+/// instalaron los hooks—, asi que se dicen por separado aunque los dos sean de
+/// REST.
+#[test]
+fn el_token_y_el_email_no_se_dicen_juntos() {
+    let faltan = missing(true, "", "");
+    assert_eq!(faltan.len(), 2, "{faltan:?}");
 }
 
 /// Un token en blanco es un token que falta. Un `export JIRA_API_TOKEN=` deja
 /// la variable puesta y vacia, y eso no es estar configurado.
 #[test]
 fn un_token_en_blanco_no_es_un_token() {
-    assert_eq!(missing(true, "   ").len(), 1);
-    assert_eq!(missing(true, "\n").len(), 1);
+    assert_eq!(missing(true, "   ", "yo@ejemplo.com").len(), 1);
+    assert_eq!(missing(true, "\n", "yo@ejemplo.com").len(), 1);
 }

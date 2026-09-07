@@ -117,29 +117,28 @@ pub fn status_of(text: &str) -> Option<String> {
 /// no incluyen la descripcion, asi que hay que pedirla.
 pub struct JiraProvider {
     project: String,
+    api: crate::api::Api,
 }
 
 impl JiraProvider {
-    pub fn new(project: impl Into<String>) -> Self {
-        JiraProvider { project: project.into() }
+    pub fn new(project: impl Into<String>, api: crate::api::Api) -> Self {
+        JiraProvider { project: project.into(), api }
     }
 }
 
 impl Provider for JiraProvider {
-    /// **La forma exacta de esta llamada no esta medida contra el board real**,
-    /// como pasa con `Op::TransitionsOf` en `board.rs`. Su fracaso no se traga:
-    /// se propaga, y quien llama decide — no poder listar no es "no hay
-    /// ninguna".
+    /// Los status a los que este issue puede ir hoy, **por REST**: ni `acli` ni
+    /// `jira-cli` saben listar las transiciones de un issue.
+    ///
+    /// Devuelve **status de destino y no nombres de transicion**, porque es
+    /// contra el mapeo de la instalacion que se compara y el mapeo habla de
+    /// status. Los dos nombres pueden no coincidir — medido: la transicion
+    /// `Listo` deja el item en `Finalizada`.
+    ///
+    /// Su fracaso no se traga: se propaga, y quien llama decide — no poder
+    /// listar no es "no hay ninguna".
     fn available_transitions(&self, key: &str) -> Result<Option<Vec<String>>> {
-        let v = crate::board::acli_json(
-            crate::port::Op::TransitionsOf,
-            Some(key),
-            "workitem transitions",
-            &["jira", "workitem", "transitions", "--key", key, "--json"],
-        )?;
-        let mut out = Vec::new();
-        crate::board::nombres_en(&v, &mut out);
-        Ok(Some(out))
+        self.api.reachable_statuses(key).map(Some)
     }
 
     fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>> {

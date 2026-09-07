@@ -135,7 +135,7 @@ impl Board for Spy {
         if self.rechaza.iter().any(|k| k == key) {
             return Ok(Transicion::Rechazada {
                 motivo: format!("\"{}\" no es una transicion de este workflow", destino.status()),
-                disponibles: Some(vec!["Ready for Review".into()]),
+                disponibles: vec!["Ready for Review".into()],
             });
         }
         self.transitions.borrow_mut().push((
