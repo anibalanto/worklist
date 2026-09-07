@@ -196,10 +196,22 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
     // ningun lado y va un worktree temporal; en un clon puede estar abierto,
     // y ahi mover la ref por debajo deja ese indice apuntando al arbol
     // anterior — el defecto de `5o`.
-    let aca = git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-        == PANORAMA;
+    //
+    // **Y un bare puede tener el `HEAD` apuntando al panorama sin tener donde
+    // escribir**, que es lo que deja `git clone --bare`. Preguntarlo por el
+    // `HEAD` solo manda a `git status` a fallar con *"esta operacion debe ser
+    // realizada en un arbol de trabajo"*. Es el mismo defecto que `assign` ya
+    // tenia arreglado y que aca nunca se aplico: en la instalacion de hoy no
+    // se ve porque su bare quedo con el `HEAD` sin nacer, que es una casualidad
+    // de como se creo y no una propiedad del diseño.
+    let con_arbol = git_output(repo, &["rev-parse", "--is-bare-repository"])
+        .map(|s| s.trim() != "true")
+        .unwrap_or(true);
+    let aca = con_arbol
+        && git_output(repo, &["rev-parse", "--symbolic-full-name", "HEAD"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+            == PANORAMA;
     if !aca {
         if let Some(wt) = worklist_core::checked_out_at(repo, PANORAMA) {
             bail!(

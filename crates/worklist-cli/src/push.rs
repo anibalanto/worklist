@@ -120,3 +120,41 @@ fn configurar_upstream(view: &Path, branch: &str) {
     }
     let _ = try_git(view, &["branch", &format!("--set-upstream-to={remota}"), branch]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::rechazo;
+
+    /// El que cierra el bucle, y el que la primera version despachaba con un
+    /// mensaje generico: git lo pone **antes** del hook, asi que no lleva
+    /// ninguna de las dos frases del `pre-receive`.
+    #[test]
+    fn el_no_fast_forward_manda_a_pull() {
+        let salida = " ! [rejected]        HEAD -> secure/sprint/21 (non-fast-forward)\n\
+                       error: failed to push some refs";
+        assert!(rechazo(salida).contains("worklist pull"), "{}", rechazo(salida));
+    }
+
+    /// Y el orden importa: el `rejected` de git tambien aparece cuando el que
+    /// rechaza es el hook, asi que matchearlo primero taparia el motivo real
+    /// con el mas comun.
+    #[test]
+    fn el_choque_contra_el_panorama_no_lo_tapa_el_rejected_de_git() {
+        let salida = "remote: reject: a2b035d edito ACC-14 no entra al panorama — choca en ACC-14.epic.md\n\
+                      ! [remote rejected] HEAD -> secure/sprint/21 (pre-receive hook declined)";
+        let r = rechazo(salida);
+        assert!(r.contains("otra ventana"), "lo tapo el no-fast-forward: {r}");
+        assert!(r.contains("worklist pull"), "{r}");
+    }
+
+    /// La deriva del proveedor **no** manda a `pull`: bajar no arregla que
+    /// alguien haya movido el item del otro lado.
+    #[test]
+    fn la_deriva_del_proveedor_manda_al_board_y_no_a_pull() {
+        let salida = "remote: reject: ACC-101 status era \"open\" en el tip, el proveedor dice \"done\"\n\
+                      ! [remote rejected] HEAD -> secure/sprint/21 (pre-receive hook declined)";
+        let r = rechazo(salida);
+        assert!(r.contains("board"), "{r}");
+        assert!(!r.contains("worklist pull"), "mando a pull, que no lo arregla: {r}");
+    }
+}
