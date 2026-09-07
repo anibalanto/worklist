@@ -71,11 +71,26 @@ fn una(v: &crate::pull::View, bare: &Path, verify: bool) -> Result<bool> {
     // Se pregunta contra `srv/<rama>` y no contra el upstream de la rama,
     // porque las vistas nacen sin upstream —`git worktree add` no lo
     // configura— y por eso `git status` nunca lo dice.
-    let base = rev_parse(&v.path, &srv_ref).unwrap_or_else(|| tip.clone());
-    let sin_empujar = git_output(&v.path, &["rev-list", "--count", &format!("{base}..{head}")])?
-        .trim()
-        .parse::<usize>()
-        .unwrap_or(0);
+    // Primero la pregunta exacta, que la contesta el servidor: **si mi HEAD es
+    // ancestro de la marca, todo lo mio subio.** No alcanza con compararla por
+    // igualdad — el servidor commitea encima de lo que recibe, asi que despues
+    // de un push la marca esta adelante de mi punta.
+    let marca = rev_parse(bare, &worklist_core::git::propagated_ref(&branch_ref));
+    let todo_subido = marca.as_deref().is_some_and(|m| {
+        try_git(bare, &["merge-base", "--is-ancestor", &head, m]).map(|(ok, _)| ok).unwrap_or(false)
+    });
+    let sin_empujar = if todo_subido {
+        0
+    } else {
+        // Y si no, se cuenta contra lo ultimo que se trajo. Es una cota
+        // superior y no un numero exacto: la historia del servidor pudo
+        // reescribirse. Decir *"hay algo"* es lo que importa acá.
+        let base = rev_parse(&v.path, &srv_ref).unwrap_or_else(|| tip.clone());
+        git_output(&v.path, &["rev-list", "--count", &format!("{base}..{head}")])?
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0)
+    };
     let empuje = if sin_empujar == 0 {
         Linea::Bien("nada".into())
     } else {

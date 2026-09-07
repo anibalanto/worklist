@@ -145,6 +145,23 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     // `fetch`** — incluido el de un `--dry-run`. Una fuente que la propia
     // consulta desplaza no puede contestar esta pregunta.
     let subido = rev_parse(bare, &worklist_core::git::propagated_ref(&branch_ref));
+    // Y la pregunta es si **todo lo mio** subio, no si mi punta *es* la marca.
+    // El servidor commitea encima de lo que recibe —el `rename`, el
+    // `normalize:`— asi que despues de un push la marca esta adelante de mi
+    // HEAD y las dos comparaciones dan distinto.
+    //
+    // Medido el 2026-09-07, y no es cosmetico: comparando por igualdad, el
+    // commit que **creaba** un item se replantaba despues de que el servidor lo
+    // renombrara, y volvia a escribir el archivo con el slug viejo. La ventana
+    // quedaba con `@el-slug.task.md` y `ACC-325.task.md`, que son el mismo item.
+    //
+    // Se pregunta en el bare porque la marca apunta a la historia del servidor,
+    // que un `fetch` no necesariamente trae — y ahi el objeto puede no existir.
+    let todo_subido = subido.as_deref().is_some_and(|marca| {
+        try_git(bare, &["merge-base", "--is-ancestor", &antes, marca])
+            .map(|(ok, _)| ok)
+            .unwrap_or(false)
+    });
 
     if dry_run {
         // No se le pide el corte al servidor y **no se hace `fetch`**: la
@@ -153,7 +170,7 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
         let Some(tip) = rev_parse(bare, &branch_ref) else {
             bail!("`{}` no existe en el servidor", v.branch);
         };
-        let sin_empujar = if subido.as_deref() == Some(antes.as_str()) {
+        let sin_empujar = if todo_subido {
             0
         } else {
             git_output(&v.path, &["rev-list", "--count", &format!("{}..{antes}", subido.unwrap_or_else(|| antes.clone()))])?
@@ -208,7 +225,7 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     // Nada sin empujar: el corte nuevo trae todo mi trabajo, y replantarlo
     // seria pedirle a git que redescubra por patch-id algo que ya se sabe. Y
     // no lo puede contestar: arriba el cuerpo quedo en su forma canonica.
-    if subido.as_deref() == Some(antes.as_str()) {
+    if todo_subido {
         git_output(&v.path, &["reset", "--hard", "--quiet", &tip])?;
         return Ok(Outcome::AlDia { replantados: 0, caidos: Vec::new() });
     }
