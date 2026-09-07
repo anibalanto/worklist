@@ -22,10 +22,15 @@
 //! **`status` es el cuarto, y no escribe nada.** Es lo unico que hace, y por
 //! eso es el unico del que se puede decir.
 //!
-//! Lo que falta ya esta decidido y sin implementar: `push`, `view add`, `new`,
+//! **`push` es el que mas pone a prueba el corte, y lo pasa**: termina en una
+//! escritura del proveedor —el hook mueve estados y crea issues— y aun asi no
+//! habla con el. Lo que hace es un `git push`; el que habla esta del otro lado.
+//!
+//! Lo que falta ya esta decidido y sin implementar: `view add`, `new`,
 //! `is-secure`.
 
 mod pull;
+mod push;
 mod status;
 
 use anyhow::Result;
@@ -70,6 +75,16 @@ enum Cmd {
         /// default lo lee una persona; quien encadena lo pide.
         #[arg(long)]
         exit_code: bool,
+    },
+    /// Empuja la vista donde uno esta parado, dice que escribio el servidor
+    /// encima, y traduce el rechazo. **No aporta garantias: aporta que el
+    /// bucle sea corrible.** Ver `commands/push.md`.
+    Push {
+        /// Cual empujar. Por defecto, aquella en la que se esta parado.
+        vista: Option<String>,
+        /// Dice que empujaria, sin empujar.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Pone una vista al dia: trae el corte de hoy y replanta encima lo que no
     /// se empujo. Ver `commands/pull.md`.
@@ -141,6 +156,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Pull { vista, all, dry_run } => pull::run(vista, all, dry_run),
+        Cmd::Push { vista, dry_run } => push::run(vista, dry_run),
         Cmd::Status { vista, all, verify, exit_code } => {
             status::run(vista, all, verify, exit_code)
         }
