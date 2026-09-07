@@ -32,34 +32,42 @@ enum Outcome {
     Amedias { linea: String, files: Vec<String> },
 }
 
-pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let todas = views(&cwd)?;
-
+/// Que vistas pidio el que corre el comando, resueltas contra las que hay.
+///
+/// Lo comparten `pull` y `status`: los dos se paran en una vista o en todas, y
+/// que la seleccion sea la misma es lo que hace que uno pueda decir lo que el
+/// otro va a hacer.
+pub fn vistas_pedidas(cwd: &Path, vista: Option<String>, all: bool) -> Result<Vec<View>> {
+    let todas = views(cwd)?;
     let objetivo: Vec<View> = if all {
         todas
     } else {
         let quiero = match vista {
             Some(v) => normalizar(&v),
-            None => rama_actual(&cwd)?,
+            None => rama_actual(cwd)?,
         };
         match todas.into_iter().find(|v| v.branch == quiero) {
             Some(v) => vec![v],
             None => bail!("no encuentro un worktree con la rama `{quiero}` en este clon"),
         }
     };
-
     // Parado afuera del clon del worklist no hay ninguna vista, y eso es lo
     // que mas pasa: la raiz del proyecto y las capas impl son otros repos.
     // Decirlo es mejor que buscar en cero.
-    let Some(primera) = objetivo.first() else {
+    if objetivo.is_empty() {
         bail!(
             "no hay ninguna vista del worklist desde aca: `{}` no es el clon del worklist.\n\
              Las vistas cuelgan de `.worklist/secure/**`.",
             cwd.display()
         );
-    };
-    let bare = servidor(&primera.path)?;
+    }
+    Ok(objetivo)
+}
+
+pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let objetivo = vistas_pedidas(&cwd, vista, all)?;
+    let bare = servidor(&objetivo[0].path)?;
     let mut amedias: Vec<(String, String, Vec<String>)> = Vec::new();
 
     for v in &objetivo {
@@ -285,7 +293,7 @@ fn recortar(bare: &Path, sprint_id: &str) -> Result<()> {
 
 /// El bare del que cuelga este clon. Hoy es un path local; el dia que sea una
 /// URL, el paso 1 se queda sin como pedir — ver `concepts/distribution.md`.
-fn servidor(view: &Path) -> Result<PathBuf> {
+pub fn servidor(view: &Path) -> Result<PathBuf> {
     let url = git_output(view, &["remote", "get-url", "srv"])
         .context("este clon no tiene un remoto `srv`")?
         .trim()

@@ -19,10 +19,14 @@
 //! el worktree, que es la otra cosa que el cliente posee. Su paso 1 le pide el
 //! corte al servidor —que es de quien es— y los pasos 2 y 3 son suyos.
 //!
-//! Lo que falta ya esta decidido y sin implementar: `view add`, `new`,
-//! `status`, `is-secure`.
+//! **`status` es el cuarto, y no escribe nada.** Es lo unico que hace, y por
+//! eso es el unico del que se puede decir.
+//!
+//! Lo que falta ya esta decidido y sin implementar: `push`, `view add`, `new`,
+//! `is-secure`.
 
 mod pull;
+mod status;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -49,6 +53,23 @@ enum Cmd {
         /// colgando de la raiz, que el formato admite.
         #[arg(long)]
         force: bool,
+    },
+    /// En que estado esta la vista: al dia con el servidor, con trabajo sin
+    /// empujar, sucia, y —si se pide— si coincide con el proveedor. **No
+    /// escribe nada.** Ver `commands/status.md`.
+    Status {
+        /// Cual mirar. Por defecto, aquella en la que se esta parado.
+        vista: Option<String>,
+        /// Todas las vistas del clon.
+        #[arg(long)]
+        all: bool,
+        /// Ademas, le pregunta al proveedor. **Es la cara**, y por eso se pide.
+        #[arg(long)]
+        verify: bool,
+        /// Sale con 1 si algo necesita atencion, para poder encadenarlo. El
+        /// default lo lee una persona; quien encadena lo pide.
+        #[arg(long)]
+        exit_code: bool,
     },
     /// Pone una vista al dia: trae el corte de hoy y replanta encima lo que no
     /// se empujo. Ver `commands/pull.md`.
@@ -120,6 +141,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Pull { vista, all, dry_run } => pull::run(vista, all, dry_run),
+        Cmd::Status { vista, all, verify, exit_code } => {
+            status::run(vista, all, verify, exit_code)
+        }
     }
 }
 
