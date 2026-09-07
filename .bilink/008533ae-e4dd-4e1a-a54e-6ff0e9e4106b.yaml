@@ -1,0 +1,26 @@
+kind: governs
+endpoint:
+  0:
+    link: path <
+    accepted:
+    - agree:
+      - Anibal
+      link: capture 5705de675a1f1374c6a097944e841801
+      hash: b22b4b3b49ad9c1e9824c875874cd00c8c98e733227a8d73f9e744bcee9dd069
+  1:
+    link: capture 29690e30bb7bf06df4bbe61b58ad71ce
+    n:
+      1:
+        link: capture efc95480050c22c97dfb57bf357b7a2d fc1d61388ac1406b543f41a061317714 ffcb40170dd7f91fd53f345d6c1d7e27
+    accepted:
+    - agree:
+      - Anibal
+      link: capture 29690e30bb7bf06df4bbe61b58ad71ce
+      hash: 7690fd1dbcf8b5296ebd4ca29fbaf978c8917be022615300a0a68a7c169e7c47
+      hash_ast: de8916936002903711b05cd9579dec882e3aa110f37add11e415e5893c7cf345
+      n:
+        1:
+          link: capture efc95480050c22c97dfb57bf357b7a2d fc1d61388ac1406b543f41a061317714 ffcb40170dd7f91fd53f345d6c1d7e27
+          hash: c0eab70cb208e486f0230b45f0e6f1558bff43635eebb2602771b4ffa29e2dac
+          hash_ast: 258710e4080fe7d02fd167ee89bdeb6ba7061024afb7118dc646502aa5881881
+    name: absorb

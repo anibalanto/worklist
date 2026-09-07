@@ -1,0 +1,4 @@
+file: crates/worklist-provider/src/absorb.rs
+query: |-
+  (struct_item
+    name: (type_identifier) @n0 (#eq? @n0 "Absorbido")) @target
