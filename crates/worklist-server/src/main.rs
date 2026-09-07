@@ -203,6 +203,43 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Cierra las divergencias de estado que un push ya no puede alcanzar.
+    ///
+    /// **No es lo mismo que la pasada de estados de `assign-keys`**, y por eso
+    /// es otro comando: aquella sale de un diff, asi que solo mueve lo que el
+    /// push movio. Lo que cambio antes de que hubiera mapeo no vuelve a
+    /// cambiar, y su divergencia se queda para siempre. Ver `ACC-317`.
+    PushStates {
+        #[arg(long)]
+        project: String,
+        /// El mapeo de estados de esta instalacion. **Sin el no hay nada que
+        /// hacer**: sin traducir, el status del worklist y el del proveedor no
+        /// se pueden comparar. Por eso aca es obligatorio y no un aviso.
+        #[arg(long)]
+        states_map: PathBuf,
+        /// Sobre que rama. Por defecto el panorama, que es el unico que tiene
+        /// el inventario completo. **Se lee, no se escribe** — que sea insegura
+        /// no entra en juego: este comando no toca git.
+        #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
+        refname: String,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        /// El email de la cuenta con la que se habla por REST. **No es un
+        /// secreto y por eso no viaja con el token**: es un dato de la
+        /// instalacion, del mismo lado que la base y el id del board. Ver
+        /// ADR-0001 § 5.
+        #[arg(long)]
+        account: Option<String>,
+        /// Mueve solo las primeras N y para. Un lote no necesita ser una
+        /// transaccion sino un corte: doscientas escrituras en un board real
+        /// conviene verlas a la decima.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Imprime el plan y no escribe nada. Sobre una corrida que toca
+        /// cientos de issues reales, mirar el plan antes no es una comodidad.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Busca un issue por titulo antes de crear, para no duplicar en un reintento.
     CreateOrFind {
         #[arg(long)]
@@ -304,6 +341,17 @@ fn main() -> Result<()> {
                 dry_run,
             )
         }
+        Cmd::PushStates { project, states_map, refname, base, account, limit, dry_run } => {
+            cmd_push_states(
+                project,
+                &states_map,
+                &refname,
+                &base,
+                account.as_deref(),
+                limit,
+                dry_run,
+            )
+        }
         Cmd::CreateOrFind { project, r#type, source, base, account, titulo, dry_run } => {
             cmd_create_or_find(project, r#type, source, &base, account.as_deref(), titulo, dry_run)
         }
@@ -336,6 +384,85 @@ fn conectar_salvo_en_seco(
         return Ok(worklist_provider::api::Api::mudo(base));
     }
     conectar(base, account)
+}
+
+/// Cierra las divergencias de estado que un push ya no puede alcanzar.
+///
+/// **Lee una vez y escribe lo justo.** El plan sale de una sola llamada al
+/// proveedor para las N claves, asi que planificar sobre el panorama entero no
+/// cuesta una lectura por item — lo que cuesta por item es moverlo, y por eso
+/// esta `--limit`.
+fn cmd_push_states(
+    project: String,
+    states_map: &std::path::Path,
+    refname: &str,
+    base: &str,
+    account: Option<&str>,
+    limit: Option<usize>,
+    dry_run: bool,
+) -> Result<()> {
+    let repo = std::env::current_dir()?;
+    let vocabulario = worklist_provider::states::vocabulario(states_del_panorama(&repo).as_deref());
+    let estados = worklist_provider::states::Estados::new(
+        &vocabulario,
+        worklist_provider::states::mapeo_de_archivo(states_map)?,
+    )?;
+
+    // La lectura si necesita credencial aunque sea `--dry-run`: el plan sale de
+    // comparar contra el proveedor, asi que sin hablar no hay plan. Es lo que
+    // lo distingue de las corridas en seco que planifican sobre el arbol solo.
+    let api = conectar(base, account)?;
+    let provider = worklist_provider::provider::JiraProvider::new(project.clone(), api);
+    let plan = worklist_provider::push_states::divergences(&repo, refname, &provider, &estados)?;
+
+    // Antes del plan, porque cambia como se lee: un total que no cuadra con el
+    // arbol se explica aca y no en la cabeza del que mira.
+    if !plan.unseen.is_empty() {
+        println!(
+            "aviso: {} clave(s) del arbol que el proveedor no informo — no se mueven: {}",
+            plan.unseen.len(),
+            plan.unseen.join(", ")
+        );
+    }
+    let todas = plan.divergences;
+
+    if todas.is_empty() {
+        println!("{refname}: no hay ningun estado que difiera");
+        return Ok(());
+    }
+    let corte = limit.unwrap_or(todas.len()).min(todas.len());
+    let lote = &todas[..corte];
+    println!("{refname}: {} divergen, {} en este lote", todas.len(), lote.len());
+    for d in lote {
+        let live = d.live.as_deref().unwrap_or("?");
+        println!("  {} {} -> {} (local: {})", d.key, live, d.target, d.local);
+    }
+    if dry_run {
+        return Ok(());
+    }
+
+    let board = JiraBoard::new(project, conectar(base, account)?);
+    let hechos = worklist_provider::push_states::push(&board, &estados, lote)?;
+    let mut movidos = 0usize;
+    for m in &hechos {
+        match &m.outcome {
+            worklist_provider::board::Transicion::Hecha => {
+                movidos += 1;
+                println!("  movido: {} -> {}", m.key, m.target);
+            }
+            worklist_provider::board::Transicion::YaEstaba => {}
+            worklist_provider::board::Transicion::Rechazada { motivo, disponibles } => {
+                println!("  NO se movio: {} -> {} — {motivo}", m.key, m.target);
+                if disponibles.is_empty() {
+                    println!("          el workflow no ofrece ninguna");
+                } else {
+                    println!("          disponibles: {}", disponibles.join(", "));
+                }
+            }
+        }
+    }
+    println!("movidos {movidos} de {}, quedan {}", lote.len(), todas.len() - movidos);
+    Ok(())
 }
 
 /// Busca por titulo antes de crear, para que un reintento no duplique.

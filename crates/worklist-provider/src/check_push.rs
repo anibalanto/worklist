@@ -65,7 +65,7 @@ fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// Clave -> status para todo item con clave real en el arbol de `rev`.
-fn tip_beliefs(repo: &Path, rev: &str) -> Result<HashMap<String, String>> {
+pub fn tip_beliefs(repo: &Path, rev: &str) -> Result<HashMap<String, String>> {
     let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
     let mut beliefs = HashMap::new();
     for name in listing.lines() {
