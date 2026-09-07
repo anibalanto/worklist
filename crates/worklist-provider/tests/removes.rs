@@ -2,6 +2,8 @@
 //!
 //! Ver `concepts/composition.md`.
 
+mod common;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::Command;
@@ -176,4 +178,111 @@ fn el_item_sacado_tambien_sale_del_items() {
     let quedó = worklist_core::product::de_yaml(&yaml).unwrap();
     assert_eq!(quedó.sprints[0].items, vec!["ACC-2".to_string()], "sigue nombrando la sacada");
     assert!(quedó.backlog.is_empty(), "quedo en el backlog: {:?}", quedó.backlog);
+}
+
+// --- la membresía: el proveedor manda ---
+
+/// El board con un sprint que tiene estas claves adentro.
+///
+/// Se usa el `Spy` de `common`, que ya modela la membresía: entrar a un sprint
+/// es salir del anterior. Reimplementar el trait acá sería un segundo board que
+/// puede diferir del que usan los demás tests.
+fn board_con(sprint: &str, keys: &[&str]) -> common::Spy {
+    let spy = common::Spy::default();
+    spy.inside
+        .borrow_mut()
+        .push((sprint.to_string(), keys.iter().map(|k| k.to_string()).collect()));
+    spy
+}
+
+fn con_composicion(items: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let (d, r) = ventana();
+    let mut p = worklist_core::product::Product::default();
+    p.sprints.push(worklist_core::product::Sprint {
+        id: "21".into(),
+        name: "21-el-sprint".into(),
+        status: "in-progress".into(),
+        key: Some("6525".into()),
+        items: items.iter().map(|s| s.to_string()).collect(),
+    });
+    std::fs::create_dir_all(r.join(".metadata")).unwrap();
+    std::fs::write(r.join(worklist_core::product::ARCHIVO), p.to_yaml().unwrap()).unwrap();
+    run(&r, &["add", "-A"]);
+    run(&r, &["commit", "-qm", "la composicion"]);
+    (d, r)
+}
+
+fn items_del_21(r: &Path) -> Vec<String> {
+    let yaml = en_rama(r, worklist_core::product::ARCHIVO).unwrap();
+    worklist_core::product::de_yaml(&yaml).unwrap().sprints[0].items.clone()
+}
+
+/// **El caso que el usuario encontró**: sacó tareas del sprint en Jira y
+/// volvían, porque la pasada agrega lo que la composición nombra y el board no
+/// tiene. Medido: seis volvieron en una sola corrida.
+#[test]
+fn una_baja_en_el_board_sale_del_items() {
+    let (_d, r) = con_composicion(&["ACC-1", "ACC-2", "ACC-3"]);
+    let (pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1", "ACC-3"]),
+        "701",
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_some(), "no escribio: {pasos:?}");
+    assert_eq!(items_del_21(&r), vec!["ACC-1".to_string(), "ACC-3".to_string()]);
+}
+
+/// Y lo que está en el board y no en el `items` **no se agrega**: entrar a un
+/// sprint es planificar, y eso se hace de este lado. Se reporta.
+#[test]
+fn lo_que_esta_solo_en_el_board_se_reporta_y_no_se_agrega() {
+    let (_d, r) = con_composicion(&["ACC-1"]);
+    let (pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1", "ACC-9"]),
+        "701",
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_none(), "escribio por una alta");
+    assert_eq!(items_del_21(&r), vec!["ACC-1".to_string()]);
+    assert!(
+        pasos.iter().any(|p| matches!(p, worklist_provider::absorb::Membresia::SoloAlla { .. })),
+        "no lo reporto: {pasos:?}"
+    );
+}
+
+/// **La guarda que más importa.** El board contesta vacío sobre un sprint que
+/// el `items` dice que tiene tres, y **no se saca ninguno**.
+///
+/// Sacar todos es de otra magnitud que sacar uno, y una lectura vacía no se
+/// distingue de una que no anduvo: un 200 con lista vacía se ve igual que un
+/// sprint que existe y está vacío de verdad.
+#[test]
+fn un_board_que_contesta_vacio_no_vacia_el_items() {
+    let (_d, r) = con_composicion(&["ACC-1", "ACC-2", "ACC-3"]);
+
+    let (pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &common::Spy::default(),
+        "701",
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_none(), "vacio el items entero");
+    assert_eq!(items_del_21(&r).len(), 3, "saco items por una lista vacia");
+    assert!(
+        pasos
+            .iter()
+            .any(|p| matches!(p, worklist_provider::absorb::Membresia::VacioSospechoso { .. })),
+        "no lo reporto: {pasos:?}"
+    );
 }

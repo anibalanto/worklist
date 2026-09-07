@@ -372,3 +372,27 @@ fn un_fracaso_que_no_nombra_claves_no_se_confunde_con_una_muerta() {
 
     assert!(worklist_provider::board::claves_rechazadas(salida, &mandadas).is_empty());
 }
+
+/// **Una baja hecha en el board no se re-agrega.**
+///
+/// Medido el 2026-09-07: alguien sacó varias tareas del sprint en Jira y
+/// volvieron en el push siguiente —*"6 issue(s) agregados"*— porque la pasada
+/// trataba como *faltante* todo lo que la composición nombra y el board no
+/// tiene. Una baja del otro lado **no sobrevivía a un push**.
+#[test]
+fn lo_que_el_board_saco_del_sprint_no_vuelve() {
+    // El sprint ya tiene clave, así que nada recibe una en esta corrida.
+    let dir = con_sprint(&["@a", "@b"], Some("6522"));
+    let r = repo(&dir);
+    let spy = Spy::default();
+    // Y el board tiene adentro **una sola**: la otra la sacaron a mano en Jira.
+    spy.inside.borrow_mut().push(("6522".to_string(), vec!["@a".to_string()]));
+
+    let res = resolve(&r, &spy);
+    let s = res.sprint.expect("resolvio el sprint");
+
+    assert!(s.added.is_empty(), "re-agrego lo que el board saco: {:?}", s.added);
+    assert!(!s.saco_el_board.is_empty(), "no reporto la baja: {:?}", s.saco_el_board);
+    let adentro = spy.inside.borrow().iter().find(|(sp, _)| sp == "6522").map(|(_, k)| k.len());
+    assert_eq!(adentro, Some(1), "el board volvio a tenerla adentro");
+}

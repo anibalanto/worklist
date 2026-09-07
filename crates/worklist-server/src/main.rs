@@ -253,6 +253,25 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Sincroniza el `items` de cada sprint con lo que el board tiene.
+    ///
+    /// **El proveedor manda**: si el board saco un item del sprint, sale del
+    /// `items`. Sin esto la baja no sobrevive a un push — la pasada de sprint
+    /// agrega lo que la composicion nombra y el board no tiene.
+    Membership {
+        #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
+        refname: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long = "board")]
+        board_id: String,
+        #[arg(long, default_value = "https://lamansys.atlassian.net")]
+        base: String,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Arma `.metadata/product.yaml` del panorama con los `_sprints/*.sprint.md`
     /// que haya, y commitea.
     ///
@@ -489,6 +508,9 @@ fn main() -> Result<()> {
             )
         }
         Cmd::MigrateProduct { refname, dry_run } => cmd_migrate_product(&refname, dry_run),
+        Cmd::Membership { refname, project, board_id, base, account, dry_run } => {
+            cmd_membership(&refname, project, &board_id, &base, account.as_deref(), dry_run)
+        }
         Cmd::Removes { refname, provider_file, project, base, account, dry_run } => {
             cmd_removes(&refname, provider_file, project, &base, account.as_deref(), dry_run)
         }
@@ -764,6 +786,15 @@ fn cmd_assign_keys(
             // Las que el board rechazo van en su propia linea: son claves que el
             // worklist tiene y el proveedor no, y este es el unico lugar donde
             // esa deriva se ve. Meterlas en la cuenta las taparia.
+            // La baja que el board hizo: **no se re-agrega**, el proveedor
+            // manda. Quien la escribe en la composicion es `absorb membresia`.
+            if !s.saco_el_board.is_empty() {
+                println!(
+                    "  ! el board saco del sprint {}: {} — no se re-agregan",
+                    s.id,
+                    s.saco_el_board.join(", ")
+                );
+            }
             if !s.rechazadas.is_empty() {
                 println!(
                     "  ! el board rechazo {}: el worklist las tiene y el no",
@@ -1634,5 +1665,49 @@ fn cmd_migrate_product(refname: &str, dry_run: bool) -> Result<()> {
     let head = hecho?;
     worklist_core::git::git_output(&repo, &["update-ref", refname, &head])?;
     println!("{refname} -> {}", &head[..7.min(head.len())]);
+    Ok(())
+}
+
+/// Trae del board las bajas de membresia.
+fn cmd_membership(
+    refname: &str,
+    project: String,
+    board_id: &str,
+    base: &str,
+    account: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let repo = std::env::current_dir()?;
+    let board = JiraBoard::new(project, conectar(base, account)?);
+    let (pasos, commit) =
+        worklist_provider::absorb::membresia(&repo, refname, &board, board_id, dry_run)?;
+
+    use worklist_provider::absorb::Membresia;
+    let mut sacados = 0;
+    for paso in &pasos {
+        match paso {
+            Membresia::Sacado { sprint, key } => {
+                sacados += 1;
+                println!("  {key}  sale del sprint {sprint}: el board no lo tiene");
+            }
+            // No se agrega: entrar a un sprint es planificar, y eso es de este
+            // lado. Lo que el proveedor arbitra es la baja.
+            Membresia::SoloAlla { sprint, key } => {
+                println!("  {key}  esta en el sprint {sprint} del board y no en el `items` — no se agrega")
+            }
+            Membresia::NoSePudoLeer { sprint, porque } => {
+                println!("  ! el sprint {sprint} no se pudo leer: {porque}")
+            }
+            // Sacar todos es de otra magnitud que sacar uno, y una lectura
+            // vacia no se distingue de una que no anduvo.
+            Membresia::VacioSospechoso { sprint, tenia } => println!(
+                "  ! el board dice que el sprint {sprint} esta vacio y el `items` tiene {tenia} — no se toca"
+            ),
+        }
+    }
+    println!("resumen: {sacados} baja(s)");
+    if let Some(sha) = commit {
+        println!("membresia: {refname} ({})", &sha[..7.min(sha.len())]);
+    }
     Ok(())
 }

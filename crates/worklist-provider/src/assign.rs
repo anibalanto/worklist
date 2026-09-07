@@ -67,6 +67,11 @@ pub struct SprintResult {
     pub created: bool,
     /// Las claves que entraron ahora.
     pub added: Vec<String>,
+    /// Las que **el board saco del sprint**: ya tenian clave y no estan adentro.
+    ///
+    /// No se re-agregan —el proveedor manda— y esta es la unica pasada que lo
+    /// ve. Quien lo escribe en la composicion es `absorb membresia`.
+    pub saco_el_board: Vec<String>,
     /// Las que el proveedor **rechazo**: el worklist las tiene y el board no.
     ///
     /// No es un fracaso de la pasada — es deriva, y este es el unico lugar
@@ -445,7 +450,13 @@ pub fn assign_window(
         // y ahi los ids son slugs hasta que la pasada 1 los reescribe.
         let sprint = match &sprint_file {
             None => None,
-            Some((id, file)) => Some(resolve_sprint(&tmp, id, file, board, board_id, dry_run)?),
+            // Las claves que **este push** acaba de asignar: son las unicas
+            // que se meten al sprint. Que el board no tenga a las demas no es
+            // que falten — es que el las saco. Ver `resolve_sprint`.
+            Some((id, file)) => {
+                let recien: Vec<String> = assigned.iter().map(|a| a.key.clone()).collect();
+                Some(resolve_sprint(&tmp, id, file, board, board_id, Some(&recien), dry_run)?)
+            }
         };
 
         let new_head = git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string();
@@ -493,6 +504,16 @@ pub(crate) fn resolve_sprint(
     file: &str,
     board: &dyn Board,
     board_id: &str,
+    // Que hacer con lo que la composicion nombra y el board no tiene.
+    //
+    // `Some(claves)` — meter **solo esas**, que son las que esta corrida acaba
+    // de asignar; las demas las saco el board. Es el caso de una ventana, donde
+    // la membresia ya viajo alguna vez.
+    //
+    // `None` — meterlas todas, porque **nunca viajaron**: es el caso de
+    // `bootstrap`, que resuelve sprints que jamas tuvieron ventana. Ahi la
+    // ausencia del board no es una baja.
+    agregar_solo: Option<&[String]>,
     dry_run: bool,
 ) -> Result<SprintResult> {
     let path = tmp.join(file);
@@ -507,6 +528,7 @@ pub(crate) fn resolve_sprint(
             // El `--dry-run` no habla con el proveedor, asi que no puede saber
             // cuales rechazaria. Vacio aca es "no se pregunto".
             rechazadas: Vec::new(),
+            saco_el_board: Vec::new(),
             already: None,
         });
     }
@@ -527,8 +549,30 @@ pub(crate) fn resolve_sprint(
     // mando: el codigo de salida de `jira-cli` es fiel. El efecto es que volver
     // a correrlo cuesta una lectura y cero escrituras.
     let adentro = board.sprint_items(board_id, &key)?;
-    let faltan: Vec<&str> =
-        members.iter().filter(|m| !adentro.contains(m)).map(|m| m.as_str()).collect();
+
+    // **Un item que la composicion nombra y el board no tiene no siempre
+    // falta.** Son dos casos, y hasta acá los dos se resolvian agregando:
+    //
+    // | acaba de recibir su clave | **falta de verdad** — nunca estuvo alla |
+    // | ya la tenia               | **el board lo saco**, y el proveedor manda |
+    //
+    // Medido el 2026-09-07: alguien saco varias tareas del sprint en Jira y
+    // volvieron en el push siguiente —"6 issue(s) agregados"— porque esta
+    // pasada las trataba como faltantes. Una baja hecha del otro lado **no
+    // sobrevivia a un push**.
+    //
+    // `recien` es lo que distingue los dos, y lo sabe el que llama: son las
+    // claves que su propia corrida asigno.
+    let nuevo = |m: &String| agregar_solo.is_none_or(|r| r.iter().any(|k| k == m));
+    let faltan: Vec<&str> = members
+        .iter()
+        .filter(|m| !adentro.contains(m) && nuevo(m))
+        .map(|m| m.as_str())
+        .collect();
+    // Y las otras se **reportan**: es la unica pasada que ve esa baja, y quien
+    // la escribe en la composicion es `absorb membresia`, sobre el panorama.
+    let saco_el_board: Vec<String> =
+        members.iter().filter(|m| !adentro.contains(m) && !nuevo(m)).cloned().collect();
     // Las que el board rechazo no frenan la pasada: son claves que el worklist
     // tiene y el proveedor no, y **esto es el unico lugar donde esa deriva se
     // ve**. Frenar aca hacia que una clave muerta bloqueara el sprint entero,
@@ -548,6 +592,7 @@ pub(crate) fn resolve_sprint(
             .map(|s| s.to_string())
             .collect(),
         rechazadas,
+        saco_el_board,
         already: Some(members.len() - faltan.len()),
     })
 }
@@ -888,7 +933,10 @@ pub fn bootstrap(
         // la epica antes que sus tasks, un escalon mas arriba. Ver `ACC-299`.
         let mut sprints = Vec::new();
         for (id, file) in &sprints_pendientes {
-            sprints.push(resolve_sprint(&tmp, id, file, board, board_id, dry_run)?);
+            // `None`: estos sprints **nunca tuvieron ventana**, asi que su
+            // membresia no viajo nunca y lo que el board no tiene falta de
+            // verdad. Ver el parametro.
+            sprints.push(resolve_sprint(&tmp, id, file, board, board_id, None, dry_run)?);
             ancla.avanzar(&tmp);
         }
 

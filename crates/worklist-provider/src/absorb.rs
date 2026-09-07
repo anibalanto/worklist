@@ -273,3 +273,115 @@ fn ahora() -> String {
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
+
+/// Que paso con la membresia de un sprint.
+#[derive(Debug)]
+pub enum Membresia {
+    /// El board saco un item del sprint, y la composicion lo saca tambien.
+    Sacado { sprint: String, key: String },
+    /// El board tiene uno que la composicion no. **No se agrega**: entrar a un
+    /// sprint es planificar, y eso se hace de este lado — lo que el proveedor
+    /// arbitra es la baja de lo que el ya no tiene. Se reporta.
+    SoloAlla { sprint: String, key: String },
+    /// El proveedor no pudo contestar que tiene el sprint. **No es que
+    /// coincida**: sin eso no hay con que comparar, y vaciar el `items` porque
+    /// una lectura fallo seria catastrofico.
+    NoSePudoLeer { sprint: String, porque: String },
+    /// El board contesto **vacio** sobre un sprint que la composicion dice que
+    /// tiene items. **No se toca**, y es la guarda que mas importa: sacarlos
+    /// todos es de otra magnitud que sacar uno, y una lectura vacia no se
+    /// distingue de una que no anduvo — un board que responde 200 con una lista
+    /// vacia se ve igual que un sprint que existe y no tiene nada.
+    VacioSospechoso { sprint: String, tenia: usize },
+}
+
+/// Sincroniza el `items` de cada sprint con lo que el board tiene.
+///
+/// **Corre sobre el panorama**, que es donde vive la composicion. Y es comparar
+/// dos listas de claves — que es lo que la composicion prometia volver esto:
+/// *sincronizar deja de ser una traduccion y pasa a ser un espejo*.
+///
+/// El proveedor manda: si el board saco un item del sprint, sale del `items`.
+/// Sin esto la baja **no sobrevive a un push**, porque la pasada de sprint
+/// agrega lo que la composicion nombra y el board no tiene — medido el
+/// 2026-09-07: seis items volvieron al sprint en una sola corrida.
+pub fn membresia(
+    repo: &Path,
+    refname: &str,
+    board: &dyn crate::board::Board,
+    board_id: &str,
+    dry_run: bool,
+) -> Result<(Vec<Membresia>, Option<String>)> {
+    let producto = worklist_core::product::leer(repo, refname)?;
+    let mut pasos = Vec::new();
+    let mut sacar: Vec<(String, String)> = Vec::new();
+
+    for s in &producto.sprints {
+        // Un sprint sin clave no existe del otro lado: no hay con que comparar,
+        // y eso no es una diferencia.
+        let Some(key) = &s.key else { continue };
+        if s.items.is_empty() {
+            continue;
+        }
+        let alla = match board.sprint_items(board_id, key) {
+            Ok(v) => v,
+            Err(e) => {
+                pasos.push(Membresia::NoSePudoLeer {
+                    sprint: s.id.clone(),
+                    porque: format!("{e:#}").lines().next().unwrap_or("").to_string(),
+                });
+                continue;
+            }
+        };
+        // La guarda: vaciar de golpe no se hace solo.
+        if alla.is_empty() {
+            pasos.push(Membresia::VacioSospechoso {
+                sprint: s.id.clone(),
+                tenia: s.items.len(),
+            });
+            continue;
+        }
+        for item in &s.items {
+            if !alla.contains(item) {
+                pasos.push(Membresia::Sacado { sprint: s.id.clone(), key: item.clone() });
+                sacar.push((s.id.clone(), item.clone()));
+            }
+        }
+        for item in &alla {
+            if !s.items.contains(item) {
+                pasos.push(Membresia::SoloAlla { sprint: s.id.clone(), key: item.clone() });
+            }
+        }
+    }
+
+    if sacar.is_empty() || dry_run {
+        return Ok((pasos, None));
+    }
+    Ok((pasos, Some(escribir_membresia(repo, refname, &sacar)?)))
+}
+
+fn escribir_membresia(repo: &Path, refname: &str, sacar: &[(String, String)]) -> Result<String> {
+    let tmp = repo.join("../.worklist-membresia");
+    let _ = std::fs::remove_dir_all(&tmp);
+    git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), refname])?;
+
+    let hecho = (|| -> Result<String> {
+        let path = tmp.join(worklist_core::product::ARCHIVO);
+        let mut p = worklist_core::product::de_yaml(&std::fs::read_to_string(&path)?)?;
+        for (sprint, key) in sacar {
+            if let Some(s) = p.sprints.iter_mut().find(|s| &s.id == sprint) {
+                s.items.retain(|i| i != key);
+            }
+        }
+        std::fs::write(&path, p.to_yaml()?)?;
+        let que: Vec<String> =
+            sacar.iter().map(|(s, k)| format!("{k} del sprint {s}")).collect();
+        worklist_core::commit_all(&tmp, &format!("membresia: sale {}", que.join(", ")))?;
+        Ok(git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
+    })();
+
+    let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
+    let head = hecho?;
+    git_output(repo, &["update-ref", refname, &head])?;
+    Ok(head)
+}
