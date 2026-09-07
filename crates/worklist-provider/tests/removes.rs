@@ -308,3 +308,35 @@ fn un_board_que_contesta_vacio_no_vacia_el_items() {
         "no lo reporto: {pasos:?}"
     );
 }
+
+/// **El bug que una tarea nueva habría pagado.**
+///
+/// Un ítem con `@` no tiene clave, así que el board **nunca** puede tenerlo en
+/// su sprint. Comparar sin filtrarlo lo trataba como una baja y lo sacaba del
+/// `items`: crear una tarea y correr `pull` la hacía desaparecer del sprint.
+///
+/// Es la misma regla que el resto: *no se preguntó* no es *no está*.
+#[test]
+fn una_tarea_nueva_sin_clave_no_se_saca_del_items() {
+    let (_d, r) = con_composicion(&["ACC-1", "@la-tarea-nueva"]);
+
+    let (pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1"]),
+        "701",
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_none(), "escribio: {pasos:?}");
+    assert!(
+        items_del_21(&r).iter().any(|i| i == "@la-tarea-nueva"),
+        "saco la tarea nueva del sprint: {:?}",
+        items_del_21(&r)
+    );
+    assert!(
+        pasos.iter().any(|p| matches!(p, worklist_provider::absorb::Membresia::SinClave { .. })),
+        "callo que habia una esperando cruzar: {pasos:?}"
+    );
+}

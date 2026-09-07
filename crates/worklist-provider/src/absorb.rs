@@ -286,6 +286,12 @@ pub enum Membresia {
     /// regla**: si el proveedor manda, mover un item *hacia* un sprint es el
     /// proveedor moviendo algo igual que sacarlo.
     Entra { sprint: String, key: String },
+    /// El item **todavia no tiene clave**: es una tarea nueva de este lado.
+    ///
+    /// No se compara y no se saca. El board no puede tenerla en su sprint —no
+    /// existe alla— asi que su ausencia no es una baja. Se dice para que se vea
+    /// que hay algo esperando cruzar.
+    SinClave { sprint: String, key: String },
     /// El board lo tiene en el sprint y **el panorama no tiene su archivo**.
     ///
     /// No se agrega, y no es una eleccion: el `items` nombraria algo que no
@@ -352,6 +358,16 @@ pub fn membresia(
             continue;
         }
         for item in &s.items {
+            // **Un item sin clave no puede estar en el sprint del board**, asi
+            // que su ausencia no dice nada: es una tarea nueva, que todavia no
+            // cruzo. Tratarla como una baja la sacaria del `items` — crear una
+            // tarea y correr `pull` la habria hecho desaparecer del sprint.
+            //
+            // Es la misma regla que el resto: *no se pregunto* no es *no esta*.
+            if worklist_core::is_unassigned(item) {
+                pasos.push(Membresia::SinClave { sprint: s.id.clone(), key: item.clone() });
+                continue;
+            }
             if !alla.contains(item) {
                 pasos.push(Membresia::Sacado { sprint: s.id.clone(), key: item.clone() });
                 sacar.push((s.id.clone(), item.clone()));

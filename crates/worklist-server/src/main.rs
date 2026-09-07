@@ -1691,6 +1691,11 @@ fn cmd_membership(
                 sacados += 1;
                 println!("  {key}  sale del sprint {sprint}: el board no lo tiene");
             }
+            // No se compara: sin clave el board no puede tenerla, asi que su
+            // ausencia no es una baja.
+            Membresia::SinClave { sprint, key } => {
+                println!("  {key}  todavia no cruzo — esperando clave para el sprint {sprint}")
+            }
             Membresia::Entra { sprint, key } => {
                 {
                     entrados += 1;
