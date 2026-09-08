@@ -415,10 +415,10 @@ pub fn membresia(
     // un sprint son dos cosas, y el segundo necesita el primero hecho.
     if !adoptar.is_empty() && !dry_run {
         let claves: Vec<String> = adoptar.iter().map(|(_, k)| k.clone()).collect();
-        let r = crate::adopt::adoptar(repo, refname, &claves, provider_de_items, false)?;
-        for paso in r.pasos {
+        let r = crate::adopt::adopt(repo, refname, &claves, provider_de_items, false)?;
+        for paso in r.steps {
             match paso {
-                crate::adopt::Paso::Adoptado { key, .. } => {
+                crate::adopt::Step::Adopted { key, .. } => {
                     let sprint = adoptar
                         .iter()
                         .find(|(_, k)| *k == key)
@@ -429,13 +429,13 @@ pub fn membresia(
                 }
                 // Lo que **no se pudo** adoptar se sigue reportando: un tipo
                 // que el worklist no modela pide decidir a que se parece.
-                crate::adopt::Paso::TipoDesconocido { key, tipo } => {
+                crate::adopt::Step::UnknownType { key, kind } => {
                     pasos.push(Membresia::NoSePudoLeer {
                         sprint: String::new(),
-                        porque: format!("{key} es un `{tipo}`, que el worklist no modela"),
+                        porque: format!("{key} es un `{kind}`, que el worklist no modela"),
                     })
                 }
-                crate::adopt::Paso::SinDatos { key } => pasos.push(Membresia::NoSePudoLeer {
+                crate::adopt::Step::NoData { key } => pasos.push(Membresia::NoSePudoLeer {
                     sprint: String::new(),
                     porque: format!("{key}: el proveedor no informo titulo o tipo"),
                 }),

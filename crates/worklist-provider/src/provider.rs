@@ -67,7 +67,7 @@ pub struct Snapshot {
     /// El tipo del issue **tal como el proveedor lo nombra** — `Tarea`,
     /// `Historia`, `Epica`.
     ///
-    /// Lo necesita [`adoptar`](crate::adopt): un item que nace del otro lado
+    /// Lo necesita [`adopt`](crate::adopt): un item que nace del otro lado
     /// tiene que llegar con su tipo, y el tipo esta en el nombre del archivo.
     /// **No se traduce aca**: la traduccion es de la instalacion, igual que el
     /// mapeo de estados.

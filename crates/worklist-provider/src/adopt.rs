@@ -19,26 +19,26 @@ use worklist_core::git::git_output;
 
 /// Que se hizo con un issue que el board tiene y el arbol no.
 #[derive(Debug)]
-pub enum Paso {
+pub enum Step {
     /// Nacio como item, con su clave por nombre.
-    Adoptado { key: String, file: String, tipo: &'static str },
+    Adopted { key: String, file: String, kind: &'static str },
     /// El proveedor tiene un tipo que el worklist no modela —un `Bug`, una
     /// `Sub-tarea`—. **No es un error**: adoptarlo pediria decidir a que se
     /// parece, y eso lo decide una persona.
-    TipoDesconocido { key: String, tipo: String },
+    UnknownType { key: String, kind: String },
     /// El proveedor no informo lo suficiente para escribir el item.
-    SinDatos { key: String },
+    NoData { key: String },
 }
 
 #[derive(Debug, Default)]
-pub struct Resultado {
-    pub pasos: Vec<Paso>,
+pub struct Outcome {
+    pub steps: Vec<Step>,
     pub commit: Option<String>,
 }
 
-impl Resultado {
-    pub fn adoptados(&self) -> usize {
-        self.pasos.iter().filter(|p| matches!(p, Paso::Adoptado { .. })).count()
+impl Outcome {
+    pub fn adopted(&self) -> usize {
+        self.steps.iter().filter(|p| matches!(p, Step::Adopted { .. })).count()
     }
 }
 
@@ -51,91 +51,91 @@ impl Resultado {
 ///
 /// **Un item sin cuerpo es valido**: el formato pide frontmatter, y la prosa es
 /// opcional.
-pub fn adoptar(
+pub fn adopt(
     repo: &Path,
     refname: &str,
-    claves: &[String],
+    keys: &[String],
     provider: &dyn Provider,
     dry_run: bool,
-) -> Result<Resultado> {
-    let mut out = Resultado::default();
-    if claves.is_empty() {
+) -> Result<Outcome> {
+    let mut out = Outcome::default();
+    if keys.is_empty() {
         return Ok(out);
     }
-    let vivo = provider.snapshot(claves)?;
-    let mut escribir: Vec<(String, String)> = Vec::new();
+    let live = provider.snapshot(keys)?;
+    let mut to_write: Vec<(String, String)> = Vec::new();
 
-    for key in claves {
-        let Some(snap) = vivo.get(key) else {
-            out.pasos.push(Paso::SinDatos { key: key.clone() });
+    for key in keys {
+        let Some(snap) = live.get(key) else {
+            out.steps.push(Step::NoData { key: key.clone() });
             continue;
         };
-        let (Some(titulo), Some(jira_tipo)) = (&snap.summary, &snap.issue_type) else {
-            out.pasos.push(Paso::SinDatos { key: key.clone() });
+        let (Some(title), Some(jira_kind)) = (&snap.summary, &snap.issue_type) else {
+            out.steps.push(Step::NoData { key: key.clone() });
             continue;
         };
-        let Some(tipo) = crate::board::worklist_type(jira_tipo) else {
-            out.pasos.push(Paso::TipoDesconocido {
+        let Some(kind) = crate::board::worklist_type(jira_kind) else {
+            out.steps.push(Step::UnknownType {
                 key: key.clone(),
-                tipo: jira_tipo.clone(),
+                kind: jira_kind.clone(),
             });
             continue;
         };
         // **El nombre del archivo es la clave, que ya la tiene.** Es la unica
         // clase de item que nace con clave: no hay `@<slug>` que asignar ni
         // renombre que rehacer.
-        let file = format!("{key}.{tipo}.md");
-        out.pasos.push(Paso::Adoptado { key: key.clone(), file: file.clone(), tipo });
-        escribir.push((file, contenido(titulo, tipo)));
+        let file = format!("{key}.{kind}.md");
+        out.steps.push(Step::Adopted { key: key.clone(), file: file.clone(), kind });
+        to_write.push((file, contents(title, kind)));
     }
 
-    if escribir.is_empty() || dry_run {
+    if to_write.is_empty() || dry_run {
         return Ok(out);
     }
-    out.commit = Some(escribir_en_rama(repo, refname, &escribir)?);
+    out.commit = Some(write_on_branch(repo, refname, &to_write)?);
     Ok(out)
 }
 
 /// El item que se escribe. **Sin cuerpo del proveedor**, con una linea que dice
 /// de donde vino.
-fn contenido(titulo: &str, tipo: &str) -> String {
-    let ahora = ahora();
-    let escapado = titulo.replace('\'', "''");
+fn contents(title: &str, kind: &str) -> String {
+    let now = now();
+    let escaped = title.replace('\'', "''");
     format!(
-        "---\ntitle: '{escapado}'\nstatus: open\ncreated_at: {ahora}\nupdated_at: {ahora}\n---\n\
-         \n# {titulo}\n\
+        "---\ntitle: '{escaped}'\nstatus: open\ncreated_at: {now}\nupdated_at: {now}\n---\n\
+         \n# {title}\n\
          \n**Nacio en el proveedor** y se adopto: es un issue que existia del otro lado y no \
          de este. El cuerpo no bajo todavia —el round-trip no cierra— asi que lo que dice el \
          board sobre este item esta alla y no aca.\n\
-         \nTipo: `{tipo}`.\n"
+         \nTipo: `{kind}`.\n"
     )
 }
 
-fn escribir_en_rama(repo: &Path, refname: &str, items: &[(String, String)]) -> Result<String> {
+fn write_on_branch(repo: &Path, refname: &str, items: &[(String, String)]) -> Result<String> {
     let tmp = repo.join("../.worklist-adopt");
     let _ = std::fs::remove_dir_all(&tmp);
     git_output(repo, &["worktree", "add", "--detach", "-q", tmp.to_str().unwrap(), refname])?;
 
-    let hecho = (|| -> Result<String> {
-        let mut claves = Vec::new();
-        for (file, texto) in items {
-            std::fs::write(tmp.join(file), texto)?;
-            claves.push(file.split('.').next().unwrap_or(file).to_string());
+    let done = (|| -> Result<String> {
+        let mut keys = Vec::new();
+        for (file, text) in items {
+            std::fs::write(tmp.join(file), text)?;
+            keys.push(file.split('.').next().unwrap_or(file).to_string());
         }
         worklist_core::commit_all(
             &tmp,
-            &format!("adopt: {} — nacieron en el proveedor", claves.join(", ")),
+            &format!("adopt: {} — nacieron en el proveedor", keys.join(", ")),
         )?;
         Ok(git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
     })();
 
     let _ = git_output(repo, &["worktree", "remove", "--force", tmp.to_str().unwrap()]);
-    let head = hecho?;
+    let head = done?;
     git_output(repo, &["update-ref", refname, &head])?;
     Ok(head)
 }
 
-fn ahora() -> String {
+fn now() -> String {
     std::process::Command::new("date")
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
         .output()

@@ -212,7 +212,7 @@ pub fn search_text(title: &str) -> String {
 ///
 /// **Es la vuelta de `jira_type` y no una tabla aparte**, asi que las dos se
 /// leen juntas y no se pueden desincronizar sin que se vea. La necesita
-/// [`adoptar`](crate::adopt): el tipo esta en el nombre del archivo, asi que un
+/// [`adopt`](crate::adopt): el tipo esta en el nombre del archivo, asi que un
 /// item que nace del otro lado no se puede escribir sin traducirlo.
 ///
 /// `None` es *"este proveedor tiene un tipo que el worklist no modela"* —un
