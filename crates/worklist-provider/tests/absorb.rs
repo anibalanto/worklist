@@ -84,6 +84,7 @@ fn el_titulo_del_board_entra_a_la_ventana() {
             status: Some("Tareas por hacer".into()),
             summary: Some("el titulo de alla".into()),
             description: None,
+            issue_type: None,
         },
     );
 
@@ -114,6 +115,7 @@ fn un_status_con_dos_vueltas_se_reporta_y_no_se_elige() {
             status: Some("Finalizada".into()),
             summary: Some("el titulo de aca".into()),
             description: None,
+            issue_type: None,
         },
     );
 
@@ -142,6 +144,7 @@ fn un_status_con_vuelta_unica_si_se_absorbe() {
             status: Some("En curso".into()),
             summary: Some("el titulo de aca".into()),
             description: None,
+            issue_type: None,
         },
     );
 
@@ -179,6 +182,7 @@ fn lo_que_cambio_de_este_lado_desde_la_marca_no_se_pisa() {
             status: Some("Tareas por hacer".into()),
             summary: Some("lo que escribieron alla".into()),
             description: None,
+            issue_type: None,
         },
     );
 
@@ -202,6 +206,7 @@ fn el_dry_run_no_escribe() {
             status: Some("Tareas por hacer".into()),
             summary: Some("otro titulo".into()),
             description: None,
+            issue_type: None,
         },
     );
 

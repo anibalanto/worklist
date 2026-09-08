@@ -261,6 +261,11 @@ enum Cmd {
     Membership {
         #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
         refname: String,
+        /// Un solo sprint por su id. **Es lo que hace que un `pull` no cueste
+        /// el proyecto entero**: `sprint_items` es una llamada por sprint.
+        /// Sin esto recorre todos, que es lo que hace falta para reconciliar.
+        #[arg(long)]
+        sprint: Option<String>,
         #[arg(long)]
         project: String,
         #[arg(long = "board")]
@@ -508,8 +513,16 @@ fn main() -> Result<()> {
             )
         }
         Cmd::MigrateProduct { refname, dry_run } => cmd_migrate_product(&refname, dry_run),
-        Cmd::Membership { refname, project, board_id, base, account, dry_run } => {
-            cmd_membership(&refname, project, &board_id, &base, account.as_deref(), dry_run)
+        Cmd::Membership { refname, sprint, project, board_id, base, account, dry_run } => {
+            cmd_membership(
+                &refname,
+                sprint.as_deref(),
+                project,
+                &board_id,
+                &base,
+                account.as_deref(),
+                dry_run,
+            )
         }
         Cmd::Removes { refname, provider_file, project, base, account, dry_run } => {
             cmd_removes(&refname, provider_file, project, &base, account.as_deref(), dry_run)
@@ -1671,6 +1684,7 @@ fn cmd_migrate_product(refname: &str, dry_run: bool) -> Result<()> {
 /// Trae del board las bajas de membresia.
 fn cmd_membership(
     refname: &str,
+    solo: Option<&str>,
     project: String,
     board_id: &str,
     base: &str,
@@ -1678,13 +1692,21 @@ fn cmd_membership(
     dry_run: bool,
 ) -> Result<()> {
     let repo = std::env::current_dir()?;
-    let board = JiraBoard::new(project, conectar(base, account)?);
-    let (pasos, commit) =
-        worklist_provider::absorb::membresia(&repo, refname, &board, board_id, dry_run)?;
+    let board = JiraBoard::new(project.clone(), conectar(base, account)?);
+    // Para adoptar hace falta leer el issue, y eso es del puerto de lectura.
+    let lector =
+        worklist_provider::provider::JiraProvider::new(project, conectar(base, account)?);
+    let (pasos, commit) = worklist_provider::absorb::membresia(
+        &repo, refname, &board, board_id, &lector, solo, dry_run,
+    )?;
 
     use worklist_provider::absorb::Membresia;
     let mut sacados = 0;
     let mut entrados = 0;
+    // **Se cuenta, o `pull` lo calla.** Un resumen de `0 baja, 0 alta` se lee
+    // como "nada que hacer", y lo que habia era un issue del board que no pudo
+    // entrar. Es la misma regla que el resto: lo que no se pudo hacer se dice.
+    let mut sin_archivo = 0;
     for paso in &pasos {
         match paso {
             Membresia::Sacado { sprint, key } => {
@@ -1704,9 +1726,9 @@ fn cmd_membership(
             }
             // No se agrega, y no es una eleccion: el `items` nombraria algo que
             // no esta y el proximo recorte falla.
-            Membresia::SinArchivo { sprint, key } => println!(
+            Membresia::SinArchivo { sprint, key } => { sin_archivo += 1; println!(
                 "  ! {key} esta en el sprint {sprint} del board y no es un item de este lado — no entra"
-            ),
+            ) },
             Membresia::NoSePudoLeer { sprint, porque } => {
                 println!("  ! el sprint {sprint} no se pudo leer: {porque}")
             }
@@ -1717,7 +1739,7 @@ fn cmd_membership(
             ),
         }
     }
-    println!("resumen: {sacados} baja(s), {entrados} alta(s)");
+    println!("resumen: {sacados} baja(s), {entrados} alta(s), {sin_archivo} sin archivo");
     if let Some(sha) = commit {
         println!("membresia: {refname} ({})", &sha[..7.min(sha.len())]);
     }

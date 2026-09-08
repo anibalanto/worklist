@@ -14,6 +14,7 @@
 
 pub mod api;
 pub mod absorb;
+pub mod adopt;
 pub mod assign;
 pub mod board;
 pub mod check_push;

@@ -292,11 +292,16 @@ pub enum Membresia {
     /// existe alla— asi que su ausencia no es una baja. Se dice para que se vea
     /// que hay algo esperando cruzar.
     SinClave { sprint: String, key: String },
-    /// El board lo tiene en el sprint y **el panorama no tiene su archivo**.
+    /// El board lo tiene en el sprint y el arbol no tiene su archivo, asi que
+    /// **el item se adopta** y despues entra.
     ///
-    /// No se agrega, y no es una eleccion: el `items` nombraria algo que no
-    /// esta, y el proximo recorte falla. Es el caso de un issue creado en Jira
-    /// que nunca fue un item de este lado.
+    /// **El proveedor es la autoridad**, asi que un issue que existe alla y no
+    /// aca es un item que falta. Antes esto se reportaba y no se hacia, con el
+    /// argumento de que el worklist era la fuente de la existencia — que es una
+    /// premisa que nadie decidio.
+    ///
+    /// Se sigue reportando cuando **no se pudo** adoptar: un tipo que el
+    /// worklist no modela, o un proveedor que no informo lo suficiente.
     SinArchivo { sprint: String, key: String },
     /// El proveedor no pudo contestar que tiene el sprint. **No es que
     /// coincida**: sin eso no hay con que comparar, y vaciar el `items` porque
@@ -320,19 +325,37 @@ pub enum Membresia {
 /// Sin esto la baja **no sobrevive a un push**, porque la pasada de sprint
 /// agrega lo que la composicion nombra y el board no tiene — medido el
 /// 2026-09-07: seis items volvieron al sprint en una sola corrida.
+/// `solo` acota a un sprint. **Es lo que hace que un `pull` no cueste el
+/// proyecto entero**: `sprint_items` es una llamada por sprint, y medido el
+/// 2026-09-07 son 1.364s cada una — recorrer los 22 son 31s para contestar una
+/// pregunta sobre uno. Y `pull --all` lo multiplicaba: veinte vistas por
+/// veintidos sprints son 440 requests.
+///
+/// `None` recorre todo, que es lo que hace falta para reconciliar el proyecto
+/// de una. Es otra corrida, y quien la pide sabe lo que cuesta.
 pub fn membresia(
     repo: &Path,
     refname: &str,
     board: &dyn crate::board::Board,
     board_id: &str,
+    // Para adoptar hace falta leer el issue —titulo y tipo—, y eso es del
+    // puerto de lectura y no del `Board`, que escribe.
+    provider_de_items: &dyn Provider,
+    solo: Option<&str>,
     dry_run: bool,
 ) -> Result<(Vec<Membresia>, Option<String>)> {
     let producto = worklist_core::product::leer(repo, refname)?;
     let mut pasos = Vec::new();
     let mut sacar: Vec<(String, String)> = Vec::new();
     let mut entrar: Vec<(String, String)> = Vec::new();
+    // Los que el board tiene y el arbol no: se adoptan **antes** de entrar al
+    // `items`, o el recorte fallaria nombrando algo que no esta.
+    let mut adoptar: Vec<(String, String)> = Vec::new();
 
     for s in &producto.sprints {
+        if solo.is_some_and(|id| id != s.id) {
+            continue;
+        }
         // Un sprint sin clave no existe del otro lado: no hay con que comparar,
         // y eso no es una diferencia.
         let Some(key) = &s.key else { continue };
@@ -377,14 +400,50 @@ pub fn membresia(
             if s.items.contains(item) {
                 continue;
             }
-            // Sin archivo no se puede agregar: el `items` nombraria algo que no
-            // esta y el recorte falla. Es un issue que nacio en Jira.
+            // Sin archivo hay que adoptarlo primero, o el `items` nombraria
+            // algo que no esta y el recorte falla.
             if archivo_de(repo, refname, item).is_err() {
-                pasos.push(Membresia::SinArchivo { sprint: s.id.clone(), key: item.clone() });
+                adoptar.push((s.id.clone(), item.clone()));
                 continue;
             }
             pasos.push(Membresia::Entra { sprint: s.id.clone(), key: item.clone() });
             entrar.push((s.id.clone(), item.clone()));
+        }
+    }
+
+    // La adopcion va primero y en su propio commit: nacer como item y entrar a
+    // un sprint son dos cosas, y el segundo necesita el primero hecho.
+    if !adoptar.is_empty() && !dry_run {
+        let claves: Vec<String> = adoptar.iter().map(|(_, k)| k.clone()).collect();
+        let r = crate::adopt::adoptar(repo, refname, &claves, provider_de_items, false)?;
+        for paso in r.pasos {
+            match paso {
+                crate::adopt::Paso::Adoptado { key, .. } => {
+                    let sprint = adoptar
+                        .iter()
+                        .find(|(_, k)| *k == key)
+                        .map(|(s, _)| s.clone())
+                        .unwrap_or_default();
+                    pasos.push(Membresia::Entra { sprint: sprint.clone(), key: key.clone() });
+                    entrar.push((sprint, key));
+                }
+                // Lo que **no se pudo** adoptar se sigue reportando: un tipo
+                // que el worklist no modela pide decidir a que se parece.
+                crate::adopt::Paso::TipoDesconocido { key, tipo } => {
+                    pasos.push(Membresia::NoSePudoLeer {
+                        sprint: String::new(),
+                        porque: format!("{key} es un `{tipo}`, que el worklist no modela"),
+                    })
+                }
+                crate::adopt::Paso::SinDatos { key } => pasos.push(Membresia::NoSePudoLeer {
+                    sprint: String::new(),
+                    porque: format!("{key}: el proveedor no informo titulo o tipo"),
+                }),
+            }
+        }
+    } else {
+        for (sprint, key) in &adoptar {
+            pasos.push(Membresia::SinArchivo { sprint: sprint.clone(), key: key.clone() });
         }
     }
 

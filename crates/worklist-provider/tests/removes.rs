@@ -228,6 +228,8 @@ fn una_baja_en_el_board_sale_del_items() {
         "refs/heads/secure/sprint/1",
         &board_con("6525", &["ACC-1", "ACC-3"]),
         "701",
+        &SinLector,
+        None,
         false,
     )
     .unwrap();
@@ -249,6 +251,8 @@ fn un_alta_en_el_board_entra_al_items() {
         "refs/heads/secure/sprint/1",
         &board_con("6525", &["ACC-1", "ACC-2"]),
         "701",
+        &SinLector,
+        None,
         false,
     )
     .unwrap();
@@ -257,27 +261,74 @@ fn un_alta_en_el_board_entra_al_items() {
     assert_eq!(items_del_21(&r), vec!["ACC-1".to_string(), "ACC-2".to_string()]);
 }
 
-/// Pero un issue que el board tiene y **no es un ítem de este lado** no entra,
-/// y no es una elección: el `items` nombraría algo que no está, y el próximo
-/// recorte falla.
+/// **Un issue que nace en el board se adopta y entra.**
+///
+/// El proveedor es la autoridad, así que uno que existe allá y no acá es un
+/// ítem que falta. Antes esto se reportaba y no se hacía, con el argumento de
+/// que el worklist era la fuente de la existencia — una premisa que nadie
+/// decidió, y que la spec ya había marcado como tal una vez.
 #[test]
-fn un_issue_sin_archivo_no_entra_al_items() {
+fn un_issue_que_nace_en_el_board_se_adopta_y_entra() {
     let (_d, r) = con_composicion(&["ACC-1"]);
-    let (pasos, commit) = worklist_provider::absorb::membresia(
+    let mut dice = BTreeMap::new();
+    dice.insert(
+        "ACC-9".to_string(),
+        Snapshot {
+            status: Some("Tareas por hacer".into()),
+            summary: Some("nacio en el board".into()),
+            description: None,
+            issue_type: Some("Tarea".into()),
+        },
+    );
+
+    let (_pasos, commit) = worklist_provider::absorb::membresia(
         &r,
         "refs/heads/secure/sprint/1",
-        &board_con("6525", &["ACC-1", "ACC-999"]),
+        &board_con("6525", &["ACC-1", "ACC-9"]),
         "701",
+        &Lector(dice),
+        Some("21"),
         false,
     )
     .unwrap();
 
-    assert!(commit.is_none(), "agrego algo que no tiene archivo");
-    assert_eq!(items_del_21(&r), vec!["ACC-1".to_string()]);
-    assert!(
-        pasos.iter().any(|p| matches!(p, worklist_provider::absorb::Membresia::SinArchivo { .. })),
-        "no lo reporto: {pasos:?}"
+    assert!(commit.is_some(), "no escribio");
+    assert!(items_del_21(&r).iter().any(|i| i == "ACC-9"), "no entro al items");
+    let texto = en_rama(&r, "ACC-9.task.md").expect("no nacio el archivo");
+    assert!(texto.contains("nacio en el board"), "sin titulo: {texto}");
+    // El cuerpo del board **no** baja todavia: el round-trip no cierra.
+    assert!(texto.contains("El cuerpo no bajo todavia"), "{texto}");
+}
+
+/// Y un tipo que el worklist no modela **no se adopta**: pediría decidir a qué
+/// se parece, y eso lo decide una persona.
+#[test]
+fn un_tipo_que_el_worklist_no_modela_no_se_adopta() {
+    let (_d, r) = con_composicion(&["ACC-1"]);
+    let mut dice = BTreeMap::new();
+    dice.insert(
+        "ACC-9".to_string(),
+        Snapshot {
+            status: None,
+            summary: Some("un bug del board".into()),
+            description: None,
+            issue_type: Some("Bug".into()),
+        },
     );
+
+    let (pasos, _) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1", "ACC-9"]),
+        "701",
+        &Lector(dice),
+        Some("21"),
+        false,
+    )
+    .unwrap();
+
+    assert!(!items_del_21(&r).iter().any(|i| i == "ACC-9"), "adopto un tipo que no modela");
+    assert!(format!("{pasos:?}").contains("Bug"), "no dijo por que: {pasos:?}");
 }
 
 /// **La guarda que más importa.** El board contesta vacío sobre un sprint que
@@ -295,6 +346,8 @@ fn un_board_que_contesta_vacio_no_vacia_el_items() {
         "refs/heads/secure/sprint/1",
         &common::Spy::default(),
         "701",
+        &SinLector,
+        None,
         false,
     )
     .unwrap();
@@ -325,6 +378,8 @@ fn una_tarea_nueva_sin_clave_no_se_saca_del_items() {
         "refs/heads/secure/sprint/1",
         &board_con("6525", &["ACC-1"]),
         "701",
+        &SinLector,
+        None,
         false,
     )
     .unwrap();
@@ -339,4 +394,73 @@ fn una_tarea_nueva_sin_clave_no_se_saca_del_items() {
         pasos.iter().any(|p| matches!(p, worklist_provider::absorb::Membresia::SinClave { .. })),
         "callo que habia una esperando cruzar: {pasos:?}"
     );
+}
+
+/// **El alcance es lo que hace que un `pull` no cueste el proyecto entero.**
+///
+/// `sprint_items` es una llamada por sprint —1.364s medidos el 2026-09-07— así
+/// que recorrer los 22 son 31s para contestar una pregunta sobre uno. Y
+/// `pull --all` lo multiplicaba: veinte vistas por veintidós sprints son 440
+/// requests.
+#[test]
+fn acotado_a_un_sprint_no_pregunta_por_los_demas() {
+    let (_d, r) = ventana();
+    // Dos sprints en la composición, y el board contesta por los dos.
+    let mut p = worklist_core::product::Product::default();
+    for (id, key, items) in
+        [("21", "6525", vec!["ACC-1"]), ("22", "6526", vec!["ACC-2"])]
+    {
+        p.sprints.push(worklist_core::product::Sprint {
+            id: id.into(),
+            name: format!("{id}-el-sprint"),
+            status: "open".into(),
+            key: Some(key.into()),
+            items: items.iter().map(|s| s.to_string()).collect(),
+        });
+    }
+    std::fs::create_dir_all(r.join(".metadata")).unwrap();
+    std::fs::write(r.join(worklist_core::product::ARCHIVO), p.to_yaml().unwrap()).unwrap();
+    run(&r, &["add", "-A"]);
+    run(&r, &["commit", "-qm", "dos sprints"]);
+
+    // El board tiene los dos vacíos de lo que la composición nombra, así que
+    // sin acotar los dos darían un paso. Acotado, sólo el 21.
+    let spy = common::Spy::default();
+    spy.inside.borrow_mut().push(("6525".into(), vec!["ACC-1".into(), "ACC-9".into()]));
+    spy.inside.borrow_mut().push(("6526".into(), vec!["ACC-2".into(), "ACC-8".into()]));
+
+    let (pasos, _) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &spy,
+        "701",
+        &SinLector,
+        Some("21"),
+        false,
+    )
+    .unwrap();
+
+    assert!(!pasos.is_empty(), "no miro ni el suyo");
+    assert!(
+        !format!("{pasos:?}").contains("\"22\""),
+        "pregunto por un sprint que no es el de la vista: {pasos:?}"
+    );
+}
+
+/// Un lector que no informa nada: los tests de membresía no prueban adopción.
+struct SinLector;
+
+impl Provider for SinLector {
+    fn snapshot(&self, _keys: &[String]) -> anyhow::Result<HashMap<String, Snapshot>> {
+        Ok(HashMap::new())
+    }
+}
+
+/// Un lector que contesta lo que el test le pone.
+struct Lector(BTreeMap<String, Snapshot>);
+
+impl Provider for Lector {
+    fn snapshot(&self, keys: &[String]) -> anyhow::Result<HashMap<String, Snapshot>> {
+        Ok(keys.iter().filter_map(|k| self.0.get(k).map(|s| (k.clone(), s.clone()))).collect())
+    }
 }

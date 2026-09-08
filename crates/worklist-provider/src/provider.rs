@@ -64,6 +64,14 @@ pub struct Snapshot {
     pub summary: Option<String>,
     /// El cuerpo tal como el proveedor lo devuelve — ADF, en el caso de Jira.
     pub description: Option<String>,
+    /// El tipo del issue **tal como el proveedor lo nombra** — `Tarea`,
+    /// `Historia`, `Epica`.
+    ///
+    /// Lo necesita [`adoptar`](crate::adopt): un item que nace del otro lado
+    /// tiene que llegar con su tipo, y el tipo esta en el nombre del archivo.
+    /// **No se traduce aca**: la traduccion es de la instalacion, igual que el
+    /// mapeo de estados.
+    pub issue_type: Option<String>,
 }
 
 pub struct FileProvider {
@@ -185,7 +193,7 @@ impl Provider for JiraProvider {
             &[
                 "jira", "workitem", "search",
                 "--jql", &jql,
-                "--fields", "key,status,summary,description",
+                "--fields", "key,status,summary,description,issuetype",
                 "--json", "--paginate",
             ],
         )?;
@@ -210,6 +218,7 @@ impl Provider for JiraProvider {
                         .and_then(|f| f.get("description"))
                         .filter(|v| !v.is_null())
                         .map(|v| v.to_string()),
+                    issue_type: get("issuetype"),
                 },
             );
         }

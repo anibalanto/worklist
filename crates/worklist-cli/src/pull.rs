@@ -86,8 +86,11 @@ pub fn run(vista: Option<String>, all: bool, dry_run: bool) -> Result<()> {
                 // La membresia se dice sola cuando saco algo: es una baja que
                 // alguien hizo del otro lado, no un detalle del comando.
                 if let Some(Ok(r)) = &membresia {
-                    if !r.starts_with("0 baja") {
-                        println!("  el board saco del sprint: {r}");
+                    // **Cualquier cosa distinta de cero se dice**, y no sólo
+                    // las bajas: un issue del board que no pudo entrar es
+                    // justamente lo que quien corre `pull` no puede deducir.
+                    if r.split(", ").any(|c| !c.starts_with('0')) {
+                        println!("  membresia: {r}");
                     }
                 }
                 if let Some(Err(porque)) = &membresia {
@@ -223,7 +226,11 @@ fn una(v: &View, bare: &Path, dry_run: bool) -> Result<Outcome> {
     // Y la membresia, que **va antes del recorte**: escribe el `items` de la
     // composicion, y el corte sale de ahi. Preguntarla despues dejaria la
     // ventana con un item que el board ya no tiene en su sprint.
-    let membresia = membresia(bare);
+    // **Su sprint, no los 22.** `sprint_items` es una llamada por sprint —1.364s
+    // medidos— asi que recorrer la composicion entera son 31s para contestar
+    // una pregunta sobre uno. Y con `--all` se multiplicaba: veinte vistas por
+    // veintidos sprints son 440 requests.
+    let membresia = membresia(bare, v.branch.strip_prefix("secure/sprint/"));
 
     // Paso 1 — el corte de hoy, donde esta el panorama. Es del servidor, y no
     // hace falta ningun canal porque el bare esta en la misma maquina. El dia
@@ -320,12 +327,13 @@ fn absorber(bare: &Path, branch_ref: &str) -> Result<String, String> {
 ///
 /// Necesita `--project` y `--board`, que estan en el `post-receive` y no en el
 /// `pre-receive` — son dos hooks con dos configuraciones distintas.
-fn membresia(bare: &Path) -> Result<String, String> {
+fn membresia(bare: &Path, sprint: Option<&str>) -> Result<String, String> {
     let Some(conexion) = crate::status::conexion_al_board(bare) else {
         return Err("el servidor no tiene hooks con `--project` y `--board`".into());
     };
     let out = std::process::Command::new("worklist-server")
         .arg("membership")
+        .args(sprint.map(|s| vec!["--sprint".to_string(), s.to_string()]).unwrap_or_default())
         .args(&conexion)
         .current_dir(bare)
         .output()

@@ -208,6 +208,25 @@ pub fn search_text(title: &str) -> String {
     out.trim().to_string()
 }
 
+/// La vuelta: el tipo del worklist para un issue type del proveedor.
+///
+/// **Es la vuelta de `jira_type` y no una tabla aparte**, asi que las dos se
+/// leen juntas y no se pueden desincronizar sin que se vea. La necesita
+/// [`adoptar`](crate::adopt): el tipo esta en el nombre del archivo, asi que un
+/// item que nace del otro lado no se puede escribir sin traducirlo.
+///
+/// `None` es *"este proveedor tiene un tipo que el worklist no modela"* —un
+/// `Bug`, un `Sub-tarea`— y **no es un error del comando**: es que adoptar eso
+/// pediria decidir a que se parece, y eso lo decide una persona.
+pub fn worklist_type(jira: &str) -> Option<&'static str> {
+    match jira {
+        "Tarea" | "Task" => Some("task"),
+        "Historia" | "Story" => Some("user-story"),
+        "Epic" | "Epica" | "Épica" => Some("epic"),
+        _ => None,
+    }
+}
+
 pub fn jira_type(worklist_type: &str) -> Result<&'static str> {
     match worklist_type {
         "task" => Ok("Tarea"),
