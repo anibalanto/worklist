@@ -455,7 +455,9 @@ pub fn assign_window(
             // que falten — es que el las saco. Ver `resolve_sprint`.
             Some((id, file)) => {
                 let recien: Vec<String> = assigned.iter().map(|a| a.key.clone()).collect();
-                Some(resolve_sprint(&tmp, id, file, board, board_id, Some(&recien), dry_run)?)
+                Some(resolve_sprint(
+                    repo, &tmp, id, file, board, board_id, &assigned, Some(&recien), dry_run,
+                )?)
             }
         };
 
@@ -498,12 +500,29 @@ pub fn assign_window(
 /// `bootstrap`, que resuelve los que ninguna ventana cubrio. Un sprint sin
 /// ventana no tenia camino al proveedor —ver la task `ACC-299`— y copiar esto
 /// habria sido la tercera copia de la misma pasada.
+///
+/// **La membresia se lee de la composicion, no del `.sprint.md`.** Es la
+/// segunda mitad de `ACC-305`: `items` en el `.sprint.md` de la ventana quedo
+/// vestigial desde que `window_files` recorta con `product.yaml`, y leerlo aca
+/// significaba mandar al proveedor una lista que ya podia estar vieja. El
+/// `.sprint.md` sigue vivo para el nombre y el `key` — eso es lo que falta de
+/// la mudanza — pero la pregunta *"quien esta adentro"* la contesta el
+/// panorama. Ver `concepts/composition.md`.
+///
+/// **Y lo que la composicion nombra puede ser el slug de algo que esta misma
+/// corrida acaba de asignar.** El renombre de la pasada 1 corre sobre `tmp` — la
+/// ventana— y el panorama todavia no lo sabe: eso le llega despues, con la
+/// propagacion. Sin traducir, un item recien creado se le mandaria al
+/// proveedor como slug y no como clave. `recien_asignados` es la pasada 1 de
+/// esta misma corrida, y es de ahi que sale la traduccion.
 pub(crate) fn resolve_sprint(
+    repo: &Path,
     tmp: &Path,
     id: &str,
     file: &str,
     board: &dyn Board,
     board_id: &str,
+    recien_asignados: &[Assigned],
     // Que hacer con lo que la composicion nombra y el board no tiene.
     //
     // `Some(claves)` — meter **solo esas**, que son las que esta corrida acaba
@@ -518,7 +537,22 @@ pub(crate) fn resolve_sprint(
 ) -> Result<SprintResult> {
     let path = tmp.join(file);
     let text = std::fs::read_to_string(&path).with_context(|| format!("leyendo {file}"))?;
-    let members = sprint_members(tmp, &sprint_declared(&text))?;
+    let producto = worklist_core::product::leer(repo, worklist_core::git::PANORAMA)?;
+    let sprint = producto
+        .sprint(id)
+        .with_context(|| format!("la composicion no tiene el sprint `{id}`"))?;
+    let declared: Vec<String> = sprint
+        .items
+        .iter()
+        .map(|item| {
+            recien_asignados
+                .iter()
+                .find(|a| &a.slug == item)
+                .map(|a| a.key.clone())
+                .unwrap_or_else(|| item.clone())
+        })
+        .collect();
+    let members = sprint_members(tmp, &declared)?;
     if dry_run {
         return Ok(SprintResult {
             id: id.to_string(),
@@ -638,15 +672,6 @@ pub(crate) fn with_sprint_key(text: &str, key: &str) -> Result<String> {
         None => format!("{fm}\nkey: {key}"),
     };
     Ok(format!("{fm}{rest}"))
-}
-
-/// Los ids que el `items` del sprint declara.
-fn sprint_declared(text: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"(?m)^items:\s*\[([^\]]*)\]").unwrap();
-    let id = regex::Regex::new(r"@?[A-Za-z0-9_-]+").unwrap();
-    re.captures(text)
-        .map(|c| id.find_iter(&c[1]).map(|m| m.as_str().to_string()).collect())
-        .unwrap_or_default()
 }
 
 /// Los miembros del sprint: la clausura de `items` sobre `parent`.
@@ -936,7 +961,9 @@ pub fn bootstrap(
             // `None`: estos sprints **nunca tuvieron ventana**, asi que su
             // membresia no viajo nunca y lo que el board no tiene falta de
             // verdad. Ver el parametro.
-            sprints.push(resolve_sprint(&tmp, id, file, board, board_id, None, dry_run)?);
+            sprints.push(resolve_sprint(
+                repo, &tmp, id, file, board, board_id, &assigned, None, dry_run,
+            )?);
             ancla.avanzar(&tmp);
         }
 

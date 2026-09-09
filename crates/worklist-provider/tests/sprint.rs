@@ -74,6 +74,33 @@ fn lo_que_viaja_de_solo_lectura_no_es_miembro() {
     assert!(!dentro.contains(&"@q".to_string()), "una task de otra rama tampoco: {dentro:?}");
 }
 
+/// **La membresia sale de la composicion, no del `.sprint.md` de la ventana.**
+/// Son dos archivos que pueden divergir — medido en `ACC-332` — y es la
+/// segunda mitad de `ACC-305`: el `.sprint.md` sigue viajando por el nombre y
+/// el `key`, pero ya no es de donde sale quien esta adentro.
+#[test]
+fn la_membresia_la_manda_la_composicion_y_no_el_sprint_md() {
+    let dir = arbol();
+    let r = repo(&dir);
+    // La composicion dice `@n` (con su subarbol, `@o`); el `.sprint.md` quedo
+    // atras y todavia dice `@q`.
+    common::componer(&r, "3", "Los sprints en el board", &["@n"], None);
+    std::fs::create_dir_all(r.join("_sprints")).unwrap();
+    std::fs::write(
+        r.join("_sprints/3.sprint.md"),
+        "---\ntitle: Los sprints en el board\nstatus: in-progress\nitems: [@q]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\ncuerpo del sprint\n",
+    )
+    .unwrap();
+    common::run(&r, &["add", "-A"]);
+    common::run(&r, &["commit", "-qm", "el sprint diverge"]);
+
+    let spy = Spy::default();
+    let res = resolve(&r, &spy);
+    let s = res.sprint.as_ref().expect("la ventana lleva un sprint");
+    let dentro = slugs(&res, &s.added);
+    assert_eq!(dentro, vec!["@n", "@o"], "la composicion manda, no el .sprint.md: {dentro:?}");
+}
+
 /// El nombre del otro lado lo escribe el worklist, con la regla de siempre:
 /// **nunca el id solo**, porque el que lee es el que menos contexto tiene.
 #[test]

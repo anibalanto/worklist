@@ -373,17 +373,18 @@ fn un_sprint_que_ya_cruzo_y_gana_un_item_lo_sube_igual() {
     let key = uno.sprints[0].key.clone();
     let antes = uno.sprints[0].added.len();
 
-    // Y después gana un ítem, como pasó de verdad.
-    let sp = r.join("_sprints/1.sprint.md");
-    let texto = std::fs::read_to_string(&sp).unwrap();
-    // `@q` es la única que el sprint no tenía: `@n` entró con su subárbol.
-    let q = uno
-        .assigned
-        .iter()
-        .find(|a| a.slug == "@q")
-        .map(|a| a.key.clone())
-        .expect("q cruzó en la primera corrida");
-    std::fs::write(&sp, texto.replace("items: [", &format!("items: [{q}, "))).unwrap();
+    // Y después gana un ítem, como pasó de verdad. La membresía la agrega
+    // quien planifica, y eso es la composición — no el `.sprint.md`, que
+    // `resolve_sprint` ya no lee para saber quién está adentro.
+    // `@q` es la única que el sprint no tenía: `@n` entró con su subárbol, y su
+    // slug en la composición ya lo reescribió el renombre de la primera
+    // corrida — corriendo `aca`, sobre el mismo árbol.
+    let key_de = |slug: &str| {
+        uno.assigned.iter().find(|a| a.slug == slug).map(|a| a.key.clone()).unwrap()
+    };
+    let n = key_de("@n");
+    let q = key_de("@q");
+    common::componer(&r, "1", "el primero", &[&n, &q], Some(&key));
     common::run(&r, &["commit", "-aqm", "entra uno mas al sprint"]);
 
     let dos = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
