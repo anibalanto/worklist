@@ -501,13 +501,12 @@ pub fn assign_window(
 /// ventana no tenia camino al proveedor —ver la task `ACC-299`— y copiar esto
 /// habria sido la tercera copia de la misma pasada.
 ///
-/// **La membresia se lee de la composicion, no del `.sprint.md`.** Es la
-/// segunda mitad de `ACC-305`: `items` en el `.sprint.md` de la ventana quedo
-/// vestigial desde que `window_files` recorta con `product.yaml`, y leerlo aca
-/// significaba mandar al proveedor una lista que ya podia estar vieja. El
-/// `.sprint.md` sigue vivo para el nombre y el `key` — eso es lo que falta de
-/// la mudanza — pero la pregunta *"quien esta adentro"* la contesta el
-/// panorama. Ver `concepts/composition.md`.
+/// **La membresia se lee de la composicion, no del `.sprint.md`.** `items` en
+/// el `.sprint.md` de la ventana quedo vestigial desde que `window_files`
+/// recorta con `product.yaml`, y leerlo aca significaba mandar al proveedor
+/// una lista que ya podia estar vieja. El `.sprint.md` sigue vivo para el
+/// nombre y el `key` — eso es lo que falta de la mudanza — pero la pregunta
+/// *"quien esta adentro"* la contesta el panorama. Ver `concepts/composition.md`.
 ///
 /// **Y lo que la composicion nombra puede ser el slug de algo que esta misma
 /// corrida acaba de asignar.** El renombre de la pasada 1 corre sobre `tmp` — la

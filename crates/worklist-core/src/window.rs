@@ -114,8 +114,8 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
     // El `.sprint.md` **todavia viaja**, y ya no es de donde sale el `items`
     // — ni aca, ni en `resolve_sprint`, que tambien paso a leer la
     // composicion. Lo que le queda es el nombre y el `key`: mientras las
-    // pasadas de sprint sigan anotando ahi, el archivo se va con ellas — es lo
-    // que falta de la segunda mitad de `ACC-305`. Ver `concepts/composition.md`.
+    // pasadas de sprint sigan anotando ahi, el archivo se va con ellas. Ver
+    // `concepts/composition.md`.
     let sprint_file = format!("_sprints/{sprint_id}.sprint.md");
     if git_output(repo, &["cat-file", "-e", &format!("{rev}:{sprint_file}")]).is_ok() {
         files.push(sprint_file);

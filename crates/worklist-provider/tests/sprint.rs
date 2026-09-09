@@ -75,9 +75,8 @@ fn lo_que_viaja_de_solo_lectura_no_es_miembro() {
 }
 
 /// **La membresia sale de la composicion, no del `.sprint.md` de la ventana.**
-/// Son dos archivos que pueden divergir — medido en `ACC-332` — y es la
-/// segunda mitad de `ACC-305`: el `.sprint.md` sigue viajando por el nombre y
-/// el `key`, pero ya no es de donde sale quien esta adentro.
+/// Son dos archivos que pueden divergir: el `.sprint.md` sigue viajando por el
+/// nombre y el `key`, pero ya no es de donde sale quien esta adentro.
 #[test]
 fn la_membresia_la_manda_la_composicion_y_no_el_sprint_md() {
     let dir = arbol();
