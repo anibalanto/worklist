@@ -53,6 +53,17 @@ pub trait Provider {
     fn available_transitions(&self, _key: &str) -> Result<Option<Vec<String>>> {
         Ok(None)
     }
+
+    /// El padre inmediato que el proveedor tiene puesto para esta clave.
+    ///
+    /// Lo necesita [`adopt`](crate::adopt): un issue que nace del otro lado
+    /// trae su padre si lo tiene, y nace suelto si no — que el formato
+    /// admite. `None` es "este proveedor no lo informa" —el de prueba no
+    /// tiene con que— y **no es** "no tiene padre": esa distincion no la
+    /// necesita adoptar, que en los dos casos escribe el item sin `parent`.
+    fn parent(&self, _key: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// Lo que el proveedor sabe de un item. `None` en un campo es "este proveedor
@@ -176,6 +187,12 @@ impl Provider for JiraProvider {
 
     fn available_transitions(&self, key: &str) -> Result<Option<Vec<String>>> {
         self.api.reachable_statuses(key).map(Some)
+    }
+
+    /// Comparte la llamada con `Board::parent_of`: es el mismo campo de Jira,
+    /// leido por la misma restriccion de `acli` — `search` no lo acepta.
+    fn parent(&self, key: &str) -> Result<Option<String>> {
+        crate::board::read_parent(key)
     }
 
     fn snapshot(&self, keys: &[String]) -> Result<HashMap<String, Snapshot>> {

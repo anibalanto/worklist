@@ -86,7 +86,12 @@ pub fn adopt(
         // renombre que rehacer.
         let file = format!("{key}.{kind}.md");
         out.steps.push(Step::Adopted { key: key.clone(), file: file.clone(), kind });
-        to_write.push((file, contents(title, kind)));
+        // Sin padre no es un error: nace suelto, que el formato admite. Un
+        // fallo puntual de esta lectura tampoco frena la adopcion — el titulo
+        // y el tipo ya se tienen, y perder el padre es menos costoso que
+        // perder el item entero.
+        let parent = provider.parent(key).ok().flatten();
+        to_write.push((file, contents(title, kind, parent.as_deref())));
     }
 
     if to_write.is_empty() || dry_run {
@@ -98,11 +103,16 @@ pub fn adopt(
 
 /// El item que se escribe. **Sin cuerpo del proveedor**, con una linea que dice
 /// de donde vino.
-fn contents(title: &str, kind: &str) -> String {
+///
+/// Sin `parent`, el item **nace suelto** — que el formato admite —, ya sea
+/// porque el issue no tiene padre alla o porque esta lectura fallo: las dos
+/// se corrigen igual, poniendo `parent` a mano.
+fn contents(title: &str, kind: &str, parent: Option<&str>) -> String {
     let now = now();
     let escaped = title.replace('\'', "''");
+    let parent_line = parent.map(|p| format!("parent: {p}\n")).unwrap_or_default();
     format!(
-        "---\ntitle: '{escaped}'\nstatus: open\ncreated_at: {now}\nupdated_at: {now}\n---\n\
+        "---\ntitle: '{escaped}'\nstatus: open\ncreated_at: {now}\nupdated_at: {now}\n{parent_line}---\n\
          \n# {title}\n\
          \n**Nacio en el proveedor** y se adopto: es un issue que existia del otro lado y no \
          de este. El cuerpo no bajo todavia —el round-trip no cierra— asi que lo que dice el \

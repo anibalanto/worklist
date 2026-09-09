@@ -300,6 +300,75 @@ fn un_issue_que_nace_en_el_board_se_adopta_y_entra() {
     assert!(texto.contains("El cuerpo no bajo todavia"), "{texto}");
 }
 
+/// **Un issue adoptado trae su padre, si el proveedor lo tiene puesto.**
+///
+/// `Snapshot` no lo lleva —lo informa `Provider::parent`, la misma llamada
+/// que `Board::parent_of`, porque `acli search` no acepta `parent` como
+/// campo— así que hace falta un lector que además conteste eso.
+#[test]
+fn un_issue_adoptado_trae_su_padre() {
+    let (_d, r) = con_composicion(&["ACC-1"]);
+    let mut dice = BTreeMap::new();
+    dice.insert(
+        "ACC-9".to_string(),
+        Snapshot {
+            status: Some("Tareas por hacer".into()),
+            summary: Some("nacio con padre".into()),
+            description: None,
+            issue_type: Some("Tarea".into()),
+        },
+    );
+    let mut padres = BTreeMap::new();
+    padres.insert("ACC-9".to_string(), "ACC-259".to_string());
+
+    let (_pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1", "ACC-9"]),
+        "701",
+        &LectorConPadre { snapshots: dice, padres },
+        Some("21"),
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_some(), "no escribio");
+    let texto = en_rama(&r, "ACC-9.task.md").expect("no nacio el archivo");
+    assert!(texto.contains("parent: ACC-259"), "no trajo el padre: {texto}");
+}
+
+/// **Y sin padre, nace suelto** — que el formato admite, y que es el mismo
+/// resultado que si esta lectura fallara: las dos se corrigen a mano igual.
+#[test]
+fn un_issue_adoptado_sin_padre_nace_suelto() {
+    let (_d, r) = con_composicion(&["ACC-1"]);
+    let mut dice = BTreeMap::new();
+    dice.insert(
+        "ACC-9".to_string(),
+        Snapshot {
+            status: Some("Tareas por hacer".into()),
+            summary: Some("nacio suelto".into()),
+            description: None,
+            issue_type: Some("Tarea".into()),
+        },
+    );
+
+    let (_pasos, commit) = worklist_provider::absorb::membresia(
+        &r,
+        "refs/heads/secure/sprint/1",
+        &board_con("6525", &["ACC-1", "ACC-9"]),
+        "701",
+        &Lector(dice),
+        Some("21"),
+        false,
+    )
+    .unwrap();
+
+    assert!(commit.is_some(), "no escribio");
+    let texto = en_rama(&r, "ACC-9.task.md").expect("no nacio el archivo");
+    assert!(!texto.contains("parent:"), "puso un padre que no tenia: {texto}");
+}
+
 /// Y un tipo que el worklist no modela **no se adopta**: pediría decidir a qué
 /// se parece, y eso lo decide una persona.
 #[test]
@@ -462,5 +531,20 @@ struct Lector(BTreeMap<String, Snapshot>);
 impl Provider for Lector {
     fn snapshot(&self, keys: &[String]) -> anyhow::Result<HashMap<String, Snapshot>> {
         Ok(keys.iter().filter_map(|k| self.0.get(k).map(|s| (k.clone(), s.clone()))).collect())
+    }
+}
+
+/// Como `Lector`, y además contesta `parent` — que `Snapshot` no lleva.
+struct LectorConPadre {
+    snapshots: BTreeMap<String, Snapshot>,
+    padres: BTreeMap<String, String>,
+}
+
+impl Provider for LectorConPadre {
+    fn snapshot(&self, keys: &[String]) -> anyhow::Result<HashMap<String, Snapshot>> {
+        Ok(keys.iter().filter_map(|k| self.snapshots.get(k).map(|s| (k.clone(), s.clone()))).collect())
+    }
+    fn parent(&self, key: &str) -> anyhow::Result<Option<String>> {
+        Ok(self.padres.get(key).cloned())
     }
 }

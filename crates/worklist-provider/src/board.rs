@@ -270,6 +270,28 @@ pub(crate) fn acli_json(
     Ok(parsed)
 }
 
+/// El padre que Jira tiene puesto para esta clave, por `workitem view`.
+///
+/// **Compartida entre `Board::parent_of` y `JiraProvider::parent`**: la
+/// primera la usa para el chequeo de idempotencia de `set_parent` — de ahi que
+/// `Op::ParentOf` diga "leer la epica" — y la segunda para adoptar, donde el
+/// padre puede ser una historia y no una epica. El campo de Jira es el mismo
+/// `parent` en los dos casos, asi que es una sola llamada y no dos.
+pub(crate) fn read_parent(key: &str) -> Result<Option<String>> {
+    let v = acli_json(
+        Op::ParentOf,
+        Some(key),
+        "workitem view --fields parent",
+        &["jira", "workitem", "view", key, "--fields", "parent", "--json"],
+    )?;
+    Ok(v.get("fields")
+        .and_then(|f| f.get("parent"))
+        .filter(|p| !p.is_null())
+        .and_then(|p| p.get("key"))
+        .and_then(|k| k.as_str())
+        .map(|s| s.to_string()))
+}
+
 /// Las operaciones de lote de `acli` —`edit` entre ellas— responden con un
 /// `results` donde cada entrada lleva su propio `status`. Donde esa forma
 /// esta, el estado de cada item es la unica verdad sobre si se hizo. Donde no
@@ -624,18 +646,7 @@ impl Board for JiraBoard {
     /// allowed` a un `search --fields parent`. Es una llamada por clave, y es
     /// el precio de no afirmar sin mirar.
     fn parent_of(&self, key: &str) -> Result<Option<String>> {
-        let v = acli_json(
-            Op::ParentOf,
-            Some(key),
-            "workitem view --fields parent",
-            &["jira", "workitem", "view", key, "--fields", "parent", "--json"],
-        )?;
-        Ok(v.get("fields")
-            .and_then(|f| f.get("parent"))
-            .filter(|p| !p.is_null())
-            .and_then(|p| p.get("key"))
-            .and_then(|k| k.as_str())
-            .map(|s| s.to_string()))
+        read_parent(key)
     }
 
     /// `jira epic add` sobre un issue que ya existe. Devuelve `false` si ya

@@ -59,9 +59,9 @@ pub enum Op {
     Link,
     /// Leer el estado en vivo de N claves en una llamada.
     Snapshot,
-    /// Leer la epica que el proveedor tiene puesta. Por `workitem view`: a un
-    /// `search --fields parent` `acli` responde que el campo no esta
-    /// permitido.
+    /// Leer el padre que el proveedor tiene puesto — epica o historia, segun
+    /// quien pregunte. Por `workitem view`: a un `search --fields parent`
+    /// `acli` responde que el campo no esta permitido.
     ParentOf,
     /// Poner la epica de un issue **que ya existe**. `acli edit` no acepta
     /// `parent`; `jira epic add` lo pone sobre issues ya creados.
@@ -134,7 +134,7 @@ impl Op {
             Op::SetDescription => "poner la descripcion",
             Op::Link => "vincular",
             Op::Snapshot => "leer el estado en vivo",
-            Op::ParentOf => "leer la epica",
+            Op::ParentOf => "leer el padre",
             Op::SetParent => "poner la epica",
             Op::AddToSprint => "meter en el sprint",
             Op::CreateSprint => "crear el sprint",
