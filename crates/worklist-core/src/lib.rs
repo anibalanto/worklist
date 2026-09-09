@@ -364,6 +364,24 @@ pub fn commit_all(repo: &Path, msg: &str) -> Result<()> {
     git(repo, &["commit", "-q", "-m", msg])
 }
 
+/// Como `commit_all`, pero el mensaje **es** el contenido: si no hay nada
+/// para comitear, comitea vacio igual. Es para un marcador que otra pasada
+/// tiene que encontrar en el log aunque el arbol donde corre no tenga donde
+/// escribir lo que anuncia — el caso de una ventana sin `product.yaml`.
+pub fn commit_marker(repo: &Path, msg: &str) -> Result<()> {
+    git(repo, &["add", "-A"])?;
+    let nada_que_comitear = git_command(repo)
+        .args(["diff", "--cached", "--quiet"])
+        .status()
+        .with_context(|| "corriendo git diff --cached --quiet")?
+        .success();
+    if nada_que_comitear {
+        git(repo, &["commit", "--allow-empty", "-q", "-m", msg])
+    } else {
+        git(repo, &["commit", "-q", "-m", msg])
+    }
+}
+
 /// Renombra un item y reescribe sus referencias en todo el repo, en un commit.
 /// Devuelve los nombres de archivo tocados (sin contar el propio renombrado).
 /// Todos los `.md` de la capa, **incluidos los de subdirectorios**.

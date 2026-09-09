@@ -209,8 +209,11 @@ fn rev(r: &Path, what: &str) -> String {
 
 fn resolver(r: &Path, old: &str, spy: &Spy) -> Option<worklist_provider::assign::WindowResult> {
     let new = rev(r, "HEAD");
+    // Sin sprint a proposito: estos tests son de la jerarquia, no de la
+    // pasada 5, y una rama con forma de ventana sin su entrada en la
+    // composicion es un error para `resolve_sprint`.
     worklist_provider::assign::assign_window(
-        r, "refs/heads/secure/sprint/1", old, &new, "https://x", spy, "701", false,
+        r, "refs/heads/insecure/all", old, &new, "https://x", spy, "701", false,
     )
     .unwrap()
 }

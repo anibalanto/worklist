@@ -6,8 +6,51 @@
 
 mod common;
 
-use common::{arbol, resolve, show, sprint, Spy};
+use common::{arbol, sprint, Spy};
 use std::cell::RefCell;
+
+/// Como `common::resolve`, parado en `secure/sprint/3` — la rama que
+/// `con_sprint` siempre usa. La pasada 5 encuentra el sprint por el nombre
+/// de la rama, asi que hace falta una de verdad y no `insecure/all`.
+///
+/// **Y lee la punta de esa rama, no `HEAD`.** `assign_window` mueve
+/// `secure/sprint/3` con `update-ref`, sin tocar el `HEAD` de `dir` — que
+/// sigue en `insecure/all`. Leer `HEAD` le habria dado a cada corrida el
+/// mismo arbol sin renombrar, como si la ventana nunca hubiera corrido antes.
+fn resolve(dir: &std::path::Path, spy: &Spy) -> worklist_provider::assign::WindowResult {
+    const REFNAME: &str = "refs/heads/secure/sprint/3";
+    let existe = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--verify", "-q", REFNAME])
+        .output()
+        .unwrap();
+    let punta = if existe.status.success() { REFNAME } else { "HEAD" };
+    let rev = String::from_utf8(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", punta])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    worklist_provider::assign::assign_window(
+        dir,
+        REFNAME,
+        worklist_provider::check_push::ALL_ZEROS,
+        &rev,
+        "https://x",
+        spy,
+        "701",
+        false,
+    )
+    .unwrap()
+    .unwrap()
+}
 
 /// Las claves que el sprint recibio, traducidas de vuelta a los slugs del
 /// worklist: las pruebas hablan de `@n` y `@o`, no de `ACC-3`.
@@ -39,8 +82,7 @@ fn con_sprint(items: &[&str], key: Option<&str>) -> tempfile::TempDir {
     dir
 }
 
-/// El sprint se crea, su id queda anotado en el `.sprint.md`, y adentro entra
-/// el subarbol de lo que `items` nombra.
+/// El sprint se crea, y adentro entra el subarbol de lo que `items` nombra.
 #[test]
 fn el_sprint_se_crea_y_lleva_su_subarbol() {
     let dir = con_sprint(&["@n"], None);
@@ -54,10 +96,17 @@ fn el_sprint_se_crea_y_lleva_su_subarbol() {
     assert_eq!(slugs(&res, &s.added), vec!["@n", "@o"], "la user story con su task");
     assert_eq!(s.already, Some(0));
 
-    // El id del proveedor queda en git, que es lo que hace que la proxima
-    // corrida no vuelva a buscarlo.
-    let texto = show(&r, &res.new_head, "_sprints/3.sprint.md");
-    assert!(texto.contains(&format!("key: {}", s.key)), "{texto}");
+    // La ventana no tiene `product.yaml` donde anotar el id — eso es del
+    // panorama, y le llega con la propagacion. Lo que queda aca es el
+    // marcador: un commit con el key en el subject.
+    let log = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&r)
+        .args(["log", "--format=%s", &res.new_head])
+        .output()
+        .unwrap();
+    let log = String::from_utf8(log.stdout).unwrap();
+    assert!(log.contains(&format!("sprint: 3 -> {}", s.key)), "{log}");
 }
 
 /// **`items` nombra los topes, no los miembros.** La epica viaja en la ventana
@@ -187,26 +236,11 @@ fn una_corrida_caida_no_deja_el_sprint_duplicado() {
 fn una_rama_sin_sprint_no_inventa_uno() {
     let dir = arbol();
     let spy = Spy::default();
-    let res = resolve(&repo(&dir), &spy);
+    // Parado en `insecure/all` y no en `secure/sprint/3`: esta rama no tiene
+    // forma de ventana, que es justo lo que el test quiere decir.
+    let res = common::resolve(&repo(&dir), &spy);
     assert!(res.sprint.is_none());
     assert!(spy.created_sprints.borrow().is_empty());
-}
-
-/// El `key` se anota **despues** de `items`, y el frontmatter sigue cerrando:
-/// pegar un campo contra el delimitador convierte todo el archivo en cuerpo.
-/// Ver la task `5i`, que ya lo pago una vez con `parent`.
-#[test]
-fn anotar_el_key_no_rompe_el_frontmatter() {
-    let dir = con_sprint(&["@n"], None);
-    let r = repo(&dir);
-    let spy = Spy::default();
-    let res = resolve(&r, &spy);
-    let texto = show(&r, &res.new_head, "_sprints/3.sprint.md");
-    let fin = texto.find("\n---\n").expect("el frontmatter cierra: {texto}");
-    let fm = &texto[..fin];
-    assert!(fm.contains("key: "), "y la clave esta adentro: {fm}");
-    assert!(fm.contains("updated_at:"), "sin comerse lo que venia despues: {fm}");
-    assert!(texto[fin..].contains("cuerpo del sprint"), "{texto}");
 }
 
 /// El id del board es argumento de la operacion y no un campo del cliente: un
@@ -326,7 +360,7 @@ fn el_dry_run_no_afirma_cuantos_ya_estaban() {
     .to_string();
     let res = worklist_provider::assign::assign_window(
         &r,
-        "refs/heads/insecure/all",
+        "refs/heads/secure/sprint/1",
         worklist_provider::check_push::ALL_ZEROS,
         &head,
         "https://x",
@@ -407,12 +441,14 @@ fn un_fracaso_que_no_nombra_claves_no_se_confunde_con_una_muerta() {
 /// tiene. Una baja del otro lado **no sobrevivía a un push**.
 #[test]
 fn lo_que_el_board_saco_del_sprint_no_vuelve() {
-    // El sprint ya tiene clave, así que nada recibe una en esta corrida.
-    let dir = con_sprint(&["@a", "@b"], Some("6522"));
+    // El sprint ya tiene clave, así que nada recibe una en esta corrida. Y
+    // los dos miembros ya son claves —no slugs—: lo que este test mide es el
+    // reporte de la baja, no la resolucion.
+    let dir = con_sprint(&["ACC-50", "ACC-51"], Some("6522"));
     let r = repo(&dir);
     let spy = Spy::default();
     // Y el board tiene adentro **una sola**: la otra la sacaron a mano en Jira.
-    spy.inside.borrow_mut().push(("6522".to_string(), vec!["@a".to_string()]));
+    spy.inside.borrow_mut().push(("6522".to_string(), vec!["ACC-50".to_string()]));
 
     let res = resolve(&r, &spy);
     let s = res.sprint.expect("resolvio el sprint");

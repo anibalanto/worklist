@@ -55,9 +55,9 @@ pub enum Step {
     Normalized { key: String },
     /// La forma canonica del panorama ya coincidia: no quedo nada que escribir.
     AlreadyNormalized { key: String },
-    /// La clave del sprint, **reescrita** sobre el `.sprint.md` del panorama.
+    /// La clave del sprint, **anotada** en la composicion del panorama.
     SprintKeyed { id: String, key: String },
-    /// El `.sprint.md` del panorama ya tenia su clave.
+    /// La composicion del panorama ya tenia esa clave.
     AlreadySprintKeyed { id: String, key: String },
 }
 
@@ -284,22 +284,16 @@ pub fn propagate(repo: &Path, refname: &str, tip: &str, base: &str, dry_run: boo
                 }
                 continue;
             }
-            // Y la clave del sprint: un campo, no un parche. El `.sprint.md`
-            // del panorama es el que se planifica, asi que su contexto difiere
-            // por trabajo legitimo y copiar el parche choca contra eso.
+            // Y la clave del sprint: un campo, no un parche. La ventana dejo
+            // un marcador sin archivo adentro — no tiene `product.yaml` donde
+            // escribirlo — y es aca, sobre el arbol del panorama, donde se
+            // anota de verdad.
             if let Some((id, key)) = sprint_subject(subject) {
-                let path = tmp.join("_sprints").join(format!("{id}.sprint.md"));
-                match std::fs::read_to_string(&path) {
-                    // La clave va a la composicion, que es donde vive lo que
-                    // el servidor sabe del sprint. El `.sprint.md` se sigue
-                    // anotando mientras exista, y se va con el.
-                    Ok(text) if crate::assign::sprint_key(&text).is_none() => {
-                        worklist_core::product::anotar_key(&tmp, &id, &key)?;
-                        std::fs::write(&path, crate::assign::with_sprint_key(&text, &key)?)?;
-                        worklist_core::commit_all(&tmp, &format!("sprint: {id} -> {key}"))?;
-                        steps.push(Step::SprintKeyed { id, key });
-                    }
-                    _ => steps.push(Step::AlreadySprintKeyed { id, key }),
+                if worklist_core::product::anotar_key(&tmp, &id, &key)? {
+                    worklist_core::commit_all(&tmp, &format!("sprint: {id} -> {key}"))?;
+                    steps.push(Step::SprintKeyed { id, key });
+                } else {
+                    steps.push(Step::AlreadySprintKeyed { id, key });
                 }
                 continue;
             }

@@ -40,12 +40,6 @@ fn repo_con_arbol() -> tempfile::TempDir {
     item(r, "ACC-9.task.md", Some("ACC-8"));
     item(r, "ACC-7.task.md", None); // suelta, de nadie
 
-    std::fs::create_dir(r.join("_sprints")).unwrap();
-    std::fs::write(
-        r.join("_sprints/10.sprint.md"),
-        "---\ntitle: El sprint\nstatus: in-progress\nitems: [ACC-2]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\nplan\n",
-    )
-    .unwrap();
     componer(r, "10", "sprint 10", &["ACC-2"]);
 
     run(r, &["add", "-A"]);
@@ -74,12 +68,6 @@ fn arbol_aislado() -> (tempfile::TempDir, std::path::PathBuf) {
     item(&r, "ACC-8.user-story.md", Some("ACC-1"));
     item(&r, "ACC-9.task.md", Some("ACC-8"));
     item(&r, "ACC-7.task.md", None);
-    std::fs::create_dir(r.join("_sprints")).unwrap();
-    std::fs::write(
-        r.join("_sprints/10.sprint.md"),
-        "---\ntitle: El sprint\nstatus: in-progress\nitems: [ACC-2]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\nplan\n",
-    )
-    .unwrap();
     componer(&r, "10", "sprint 10", &["ACC-2"]);
     run(&r, &["add", "-A"]);
     run(&r, &["commit", "-q", "-m", "arbol"]);
@@ -150,18 +138,13 @@ fn no_lleva_lo_que_no_es_de_la_ventana() {
     assert!(!files.contains(&"ACC-9.task.md".to_string()));
     // Una task suelta, de nadie.
     assert!(!files.contains(&"ACC-7.task.md".to_string()));
-    assert_eq!(files.len(), 4, "sprint + declarado + hijo + epica");
+    assert_eq!(files.len(), 3, "declarado + hijo + epica");
 }
 
 #[test]
 fn un_sprint_que_nombra_algo_que_no_esta_falla() {
     let dir = repo_con_arbol();
     let r = dir.path();
-    std::fs::write(
-        r.join("_sprints/11.sprint.md"),
-        "---\ntitle: Roto\nstatus: open\nitems: [ACC-404]\ncreated_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n",
-    )
-    .unwrap();
     componer(r, "11", "sprint 11", &["ACC-404"]);
     run(r, &["add", "-A"]);
     run(r, &["commit", "-q", "-m", "sprint roto"]);
@@ -349,11 +332,8 @@ fn sin_vocabulario_declarado_la_ventana_no_inventa_uno() {
     assert!(!files.iter().any(|f| f.starts_with(".metadata/")));
 }
 
-/// La composicion del producto: de aca lee el recorte desde `ACC-305`.
-///
-/// El `.sprint.md` sigue al lado porque las pasadas que sincronizan sprints
-/// todavia lo leen; se va con ellas.
-fn componer(r: &std::path::Path, id: &str, name: &str, items: &[&str]) {
+/// La composicion del producto: de aca lee el recorte.
+fn componer(r: &std::path::Path, id: &str, titulo: &str, items: &[&str]) {
     let path = r.join(worklist_core::product::ARCHIVO);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut p = std::fs::read_to_string(&path)
@@ -363,7 +343,7 @@ fn componer(r: &std::path::Path, id: &str, name: &str, items: &[&str]) {
     p.sprints.retain(|s| s.id != id);
     p.sprints.push(worklist_core::product::Sprint {
         id: id.into(),
-        name: name.into(),
+        titulo: titulo.into(),
         status: "in-progress".into(),
         key: None,
         items: items.iter().map(|s| s.to_string()).collect(),

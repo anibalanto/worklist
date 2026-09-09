@@ -277,13 +277,13 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Arma `.metadata/product.yaml` del panorama con los `_sprints/*.sprint.md`
-    /// que haya, y commitea.
+    /// Le agrega el titulo a cada sprint de la composicion, leyendolo de su
+    /// `.sprint.md`, y borra `_sprints/` entero.
     ///
-    /// Es la migracion de `ACC-304`, y es **mecanica**: el nombre sale del
-    /// titulo entero. Los `.sprint.md` **no se borran todavia**: las pasadas
-    /// que sincronizan sprints los siguen leyendo, y se van con ellas.
-    MigrateProduct {
+    /// Es lo unico que le faltaba a la composicion para bastarse sola: `key`,
+    /// `status` e `items` ya son de ahi. Edita lo que hay — no reconstruye—,
+    /// asi que una membresia que ya diverge del `.sprint.md` no se pisa.
+    DropSprintFiles {
         #[arg(long = "ref", default_value = "refs/heads/insecure/all")]
         refname: String,
         #[arg(long)]
@@ -512,7 +512,7 @@ fn main() -> Result<()> {
                 dry_run,
             )
         }
-        Cmd::MigrateProduct { refname, dry_run } => cmd_migrate_product(&refname, dry_run),
+        Cmd::DropSprintFiles { refname, dry_run } => cmd_drop_sprint_files(&refname, dry_run),
         Cmd::Membership { refname, sprint, project, board_id, base, account, dry_run } => {
             cmd_membership(
                 &refname,
@@ -1029,8 +1029,8 @@ fn report_propagated(p: &worklist_provider::propagate::Propagated, dry_run: bool
             Step::AlreadyNormalized { key } => {
                 println!("  normalize: {key}  (el panorama ya lo tenia)")
             }
-            // Y la clave del sprint es un campo, no un parche: el `.sprint.md`
-            // del panorama es el que se planifica.
+            // Y la clave del sprint es un campo, no un parche: la ventana
+            // dejo un marcador, y aca es donde se anota en la composicion.
             Step::SprintKeyed { id, key } => println!("  sprint: {id} -> {key}  (rehecho)"),
             Step::AlreadySprintKeyed { id, key } => {
                 println!("  sprint: {id} -> {key}  (el panorama ya lo tenia)")
@@ -1638,24 +1638,33 @@ fn cmd_removes(
     Ok(())
 }
 
-/// Arma la composicion del panorama con lo que los `.sprint.md` dicen.
-fn cmd_migrate_product(refname: &str, dry_run: bool) -> Result<()> {
+/// Le agrega el titulo a cada sprint de la composicion, leyendolo de su
+/// `.sprint.md`, y borra `_sprints/` entero. `key`, `status` e `items` no se
+/// tocan: ya son de la composicion desde antes.
+fn cmd_drop_sprint_files(refname: &str, dry_run: bool) -> Result<()> {
     let repo = std::env::current_dir()?;
-    let p = worklist_core::product::desde_los_sprint_md(&repo, refname)?;
-    if p.sprints.is_empty() {
-        anyhow::bail!("{refname} no tiene ningun `_sprints/*.sprint.md` de donde migrar");
-    }
+    let p = worklist_core::product::agregar_titulos(&repo, refname)?;
     println!("{refname}: {} sprint(s)", p.sprints.len());
+    let mut sin_titulo = Vec::new();
     for s in &p.sprints {
         let key = s.key.as_deref().unwrap_or("—");
-        println!("  {:>3}  {:<52} {:<8} key {key}  {} item(s)", s.id, s.name, s.status, s.items.len());
+        println!("  {:>3}  {:<52} {:<8} key {key}  {} item(s)", s.id, s.titulo, s.status, s.items.len());
+        if s.titulo.is_empty() {
+            sin_titulo.push(s.id.as_str());
+        }
+    }
+    if !sin_titulo.is_empty() {
+        println!(
+            "  ! sin titulo — su `.sprint.md` no tenia `title:` o ya no esta: {}",
+            sin_titulo.join(", ")
+        );
     }
     if dry_run {
         println!("(dry-run: no se escribio nada)");
         return Ok(());
     }
 
-    let tmp = repo.join("../.worklist-migrate-product");
+    let tmp = repo.join("../.worklist-drop-sprint-files");
     let _ = std::fs::remove_dir_all(&tmp);
     worklist_core::git::git_output(
         &repo,
@@ -1663,11 +1672,13 @@ fn cmd_migrate_product(refname: &str, dry_run: bool) -> Result<()> {
     )?;
     let hecho = (|| -> Result<String> {
         let dest = tmp.join(worklist_core::product::ARCHIVO);
-        std::fs::create_dir_all(dest.parent().unwrap())?;
         std::fs::write(&dest, p.to_yaml()?)?;
+        if tmp.join("_sprints").exists() {
+            worklist_core::git::git_output(&tmp, &["rm", "-r", "-q", "_sprints"])?;
+        }
         worklist_core::commit_all(
             &tmp,
-            &format!("product: la composicion de los {} sprints", p.sprints.len()),
+            &format!("product: titulo de los {} sprints, y _sprints/ se borra", p.sprints.len()),
         )?;
         Ok(worklist_core::git::git_output(&tmp, &["rev-parse", "HEAD"])?.trim().to_string())
     })();

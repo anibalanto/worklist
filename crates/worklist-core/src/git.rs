@@ -156,15 +156,11 @@ pub fn normalize_subject(subject: &str) -> Option<String> {
 
 /// El id y la clave de un `sprint: <id> -> <clave>`, que tampoco se copia.
 ///
-/// La pasada 5 escribe **un campo** —`key`— sobre el `.sprint.md` de la
-/// ventana. Copiarlo como parche arrastra las lineas de contexto, y el
-/// `.sprint.md` del panorama es el que se planifica: ahi se cierra el sprint y
-/// se mueven los items. Asi que el contexto difiere por trabajo legitimo, y el
-/// parche choca sobre algo que no estaba tratando de cambiar.
-///
-/// **Rehacerlo escribe `key` y nada mas**, que es lo unico que la ventana sabe
-/// y el panorama no. `status` e `items` no viajan hacia arriba: la
-/// planificacion se edita en el panorama. Ver `concepts/propagation.md`.
+/// La ventana no tiene `product.yaml` para escribirle el `key` — es del
+/// panorama, de un solo lado — asi que la pasada 5 deja este commit como
+/// marcador, sin ningun archivo adentro. Rehacerlo es donde de verdad se
+/// anota: `product::anotar_key` sobre el arbol del panorama. Ver
+/// `concepts/propagation.md`.
 pub fn sprint_subject(subject: &str) -> Option<(String, String)> {
     let rest = subject.strip_prefix("sprint: ")?;
     let (id, key) = rest.split_once(" -> ")?;
@@ -188,22 +184,6 @@ pub fn redone_above(subject: &str) -> bool {
     rename_subject(subject).is_some()
         || normalize_subject(subject).is_some()
         || sprint_subject(subject).is_some()
-}
-
-/// Si lo que choca es **solo** el `.sprint.md`.
-///
-/// Al replantar, eso se resuelve a favor del corte: la planificacion —`status`
-/// e `items`— se edita en el panorama y baja regenerando, asi que el commit de
-/// la ventana arrastra como contexto un `items` que ya quedo viejo y choca
-/// sobre algo que no estaba tratando de cambiar. Es la misma asimetria que
-/// hace que la clave del sprint se rehaga en vez de copiarse, leida para el
-/// otro lado. Ver `concepts/propagation.md`.
-///
-/// **Es de la bajada y no del cherry-pick**: hacia arriba las ediciones que la
-/// ventana le hace al `.sprint.md` si viajan, asi que esto no puede vivir
-/// adentro de `cherry_pick_one`, que las dos direcciones comparten.
-pub fn planning_only(files: &[String]) -> bool {
-    !files.is_empty() && files.iter().all(|f| f.starts_with("_sprints/"))
 }
 
 /// Si lo que el commit dice en los archivos que chocan ya esta en el arbol,

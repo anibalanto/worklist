@@ -111,15 +111,6 @@ pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<Strin
     }
 
     let mut files: Vec<String> = keep.iter().map(|id| items[id].file.clone()).collect();
-    // El `.sprint.md` **todavia viaja**, y ya no es de donde sale el `items`
-    // — ni aca, ni en `resolve_sprint`, que tambien paso a leer la
-    // composicion. Lo que le queda es el nombre y el `key`: mientras las
-    // pasadas de sprint sigan anotando ahi, el archivo se va con ellas. Ver
-    // `concepts/composition.md`.
-    let sprint_file = format!("_sprints/{sprint_id}.sprint.md");
-    if git_output(repo, &["cat-file", "-e", &format!("{rev}:{sprint_file}")]).is_ok() {
-        files.push(sprint_file);
-    }
     // El vocabulario, si el proyecto lo declara: sin el, `state change` parado
     // en la ventana cae al vocabulario por defecto y rechaza un estado que el
     // proyecto si declara. Ver `concepts/states.md`.
@@ -289,13 +280,6 @@ pub fn open(
                 crate::git::Picked::Superseded => eprintln!(
                     "  dejado caer: {corto} — ya esta en el corte modulo normalizacion"
                 ),
-                // Y si lo unico que choca es el `.sprint.md`, gana el corte:
-                // la planificacion se edita arriba y baja regenerando.
-                crate::git::Picked::Conflict { ref files, .. }
-                    if crate::git::planning_only(files) =>
-                {
-                    eprintln!("  dejado caer: {corto} — la planificacion del sprint es del panorama")
-                }
                 // Y los que el servidor rehace arriba: si chocan es porque el
                 // corte ya los trae hechos. Que la pregunta llegue recien
                 // despues del choque es lo que protege a la ventana adelantada
@@ -441,9 +425,6 @@ pub fn replantar(view: &Path, tip: &str, desde: &str) -> Result<Replante> {
             crate::git::Picked::Empty => {}
             crate::git::Picked::Superseded => {
                 r.caidos.push(format!("{linea} (ya esta en el corte modulo normalizacion)"))
-            }
-            crate::git::Picked::Conflict { ref files, .. } if crate::git::planning_only(files) => {
-                r.caidos.push(format!("{linea} (la planificacion del sprint es del panorama)"))
             }
             crate::git::Picked::Conflict { .. } if crate::git::redone_above(&subject) => {
                 r.caidos.push(format!("{linea} (el corte ya lo trae rehecho)"))

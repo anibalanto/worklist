@@ -159,7 +159,7 @@ fn el_item_sacado_tambien_sale_del_items() {
     let mut p = worklist_core::product::Product::default();
     p.sprints.push(worklist_core::product::Sprint {
         id: "1".into(),
-        name: "1-el-primero".into(),
+        titulo: "el primero".into(),
         status: "in-progress".into(),
         key: Some("6505".into()),
         items: vec!["ACC-1".into(), "ACC-2".into()],
@@ -200,7 +200,7 @@ fn con_composicion(items: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
     let mut p = worklist_core::product::Product::default();
     p.sprints.push(worklist_core::product::Sprint {
         id: "21".into(),
-        name: "21-el-sprint".into(),
+        titulo: "el sprint".into(),
         status: "in-progress".into(),
         key: Some("6525".into()),
         items: items.iter().map(|s| s.to_string()).collect(),
@@ -412,7 +412,7 @@ fn acotado_a_un_sprint_no_pregunta_por_los_demas() {
     {
         p.sprints.push(worklist_core::product::Sprint {
             id: id.into(),
-            name: format!("{id}-el-sprint"),
+            titulo: format!("el sprint {id}"),
             status: "open".into(),
             key: Some(key.into()),
             items: items.iter().map(|s| s.to_string()).collect(),

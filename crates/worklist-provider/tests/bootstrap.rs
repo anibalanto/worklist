@@ -318,9 +318,9 @@ fn una_epica_que_ya_tiene_clave_sigue_siendo_el_parent_de_sus_tasks() {
     }
 }
 
-/// `ACC-299`: un sprint sin ventana no tenía camino al proveedor. El board
-/// mostró 22 sprints en el worklist y 17 en Jira, con el que estaba en curso
-/// entre los que faltaban.
+/// Un sprint sin ventana no tenia camino al proveedor, hasta que el
+/// bootstrap tambien los resuelve — al final, porque lo que les mete adentro
+/// son claves que la pasada 1 recien escribio.
 #[test]
 fn los_sprints_sin_key_tambien_cruzan_y_van_al_final() {
     let dir = arbol();
@@ -344,12 +344,13 @@ fn los_sprints_sin_key_tambien_cruzan_y_van_al_final() {
     for k in &sp.added {
         assert!(k.starts_with("ACC-"), "entró una clave, no un slug: {k}");
     }
-    // Y el `key` quedó anotado, así que la segunda corrida no lo vuelve a crear.
-    let sprint_md = common::show(&r, REF, "_sprints/1.sprint.md");
-    assert!(sprint_md.contains(&format!("key: {}", sp.key)), "falta el key:\n{sprint_md}");
+    // Y el `key` quedó anotado en la composición, así que la segunda corrida
+    // no lo vuelve a crear.
+    let producto = worklist_core::product::leer(&r, REF).unwrap();
+    assert_eq!(producto.sprint("1").unwrap().key.as_deref(), Some(sp.key.as_str()));
     // La segunda corrida ya no devuelve `None` —los sprints se reconcilian
     // siempre— pero no mueve nada: la idempotencia la da la pasada, no el
-    // filtro. Ver `ACC-301`.
+    // filtro.
     let otra = bootstrap(&r, REF, "https://x", &spy, "701", None, false).unwrap().unwrap();
     assert!(otra.assigned.is_empty(), "no queda ningun item que pedir");
     assert!(otra.sprints.iter().all(|s| !s.created && s.added.is_empty()), "y el sprint quieto");

@@ -59,7 +59,8 @@ pub struct WindowResult {
 /// Lo que la pasada 5 hizo con el sprint de la ventana.
 #[derive(Debug)]
 pub struct SprintResult {
-    /// El numero del worklist — el de `_sprints/17.sprint.md`.
+    /// El numero del sprint en el worklist — el de la composicion, y el de
+    /// `secure/sprint/<id>`.
     pub id: String,
     /// Su id en el proveedor.
     pub key: String,
@@ -111,31 +112,6 @@ pub fn pending_requests(repo: &Path, rev: &str) -> Result<Vec<String>> {
             out.push(format!("{slug}\t{item_type}"));
         }
     }
-    Ok(out)
-}
-
-/// Todos los sprints del arbol: `(numero, ruta)`.
-///
-/// Un sprint no es un issue —se pide con `create_or_find_sprint`— pero uno sin
-/// clave es lo mismo que un item sin clave: algo que el proveedor todavia no
-/// nombra. Dejarlos afuera producia el agujero que el board mostro, con el
-/// sprint en curso entre los que faltaban. Ver `ACC-299`.
-///
-/// **Y se devuelven todos, no solo los que no tienen clave.** Filtrar por eso
-/// trataba al sprint como a un item: una vez que tiene identidad, listo. Pero
-/// un sprint es tambien una **membresia**, y la membresia cambia mientras el
-/// sprint vive — que es lo normal en el que esta en curso. La idempotencia no
-/// la da este filtro sino `resolve_sprint`, que lee que hay adentro y manda
-/// solo lo que falta. Ver `ACC-301`.
-pub fn sprints_del_arbol(repo: &Path, rev: &str) -> Result<Vec<(String, String)>> {
-    let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
-    let mut out = Vec::new();
-    for name in listing.lines() {
-        let Some(base) = name.strip_prefix("_sprints/") else { continue };
-        let Some(id) = base.strip_suffix(".sprint.md") else { continue };
-        out.push((id.to_string(), name.to_string()));
-    }
-    out.sort_by_key(|(id, _)| id.parse::<u32>().unwrap_or(u32::MAX));
     Ok(out)
 }
 
@@ -306,13 +282,13 @@ pub fn assign_window(
     }
     let raw = pending_requests(repo, new_rev)?;
     let changed = changed_keys(repo, old, new_rev)?;
-    let sprint_file = sprint_file(repo, new_rev)?;
+    let sprint_id = sprint_id_de_la_rama(refname);
     // **Que no haya nada que asignar no es que no haya nada que hacer.** Una
     // ventana ya resuelta no trae pedidos ni cambios, y es justo la que tiene
     // sus issues creados y su sprint sin existir del otro lado. La pasada 5
     // reconcilia, asi que corre igual. Ver `concepts/sync.md` seccion "Corre
     // aunque no haya nada que asignar".
-    if raw.is_empty() && changed.is_empty() && sprint_file.is_none() {
+    if raw.is_empty() && changed.is_empty() && sprint_id.is_none() {
         return Ok(None);
     }
 
@@ -446,17 +422,18 @@ pub fn assign_window(
 
         // ── Pasada 5: el sprint, con la ventana entera ya resuelta.
         //
-        // Va al final porque la membresia se lee del `items` del `.sprint.md`,
-        // y ahi los ids son slugs hasta que la pasada 1 los reescribe.
-        let sprint = match &sprint_file {
+        // Va al final porque la membresia se lee de la composicion, y ahi los
+        // ids son slugs hasta que la pasada 1 los reescribe — ver
+        // `resolve_sprint`.
+        let sprint = match &sprint_id {
             None => None,
             // Las claves que **este push** acaba de asignar: son las unicas
             // que se meten al sprint. Que el board no tenga a las demas no es
             // que falten — es que el las saco. Ver `resolve_sprint`.
-            Some((id, file)) => {
+            Some(id) => {
                 let recien: Vec<String> = assigned.iter().map(|a| a.key.clone()).collect();
                 Some(resolve_sprint(
-                    repo, &tmp, id, file, board, board_id, &assigned, Some(&recien), dry_run,
+                    repo, &tmp, id, board, board_id, &assigned, Some(&recien), dry_run,
                 )?)
             }
         };
@@ -486,27 +463,23 @@ pub fn assign_window(
     Ok(Some(result))
 }
 
-/// El `.sprint.md` que el arbol de `rev` lleva, y el numero de sprint que lo
-/// nombra. Una ventana lleva exactamente uno.
+/// El numero de sprint que declara el nombre de una rama de ventana.
 ///
-/// **No es un pedido y nunca lo fue**: el `/` no es un caracter de id, asi que
-/// `split_item_name` descarta `_sprints/17.sprint.md` y no entra a la pasada 1.
-/// Un sprint del proveedor no es un issue. Ver `concepts/sync.md` seccion "El
-/// sprint viaja como sprint, no como issue".
+/// `secure/sprint/<id>` -> `Some(id)`; cualquier otra cosa no es una ventana
+/// y no lleva sprint. El id vive en el nombre de la rama desde siempre — ya
+/// no hace falta un `.sprint.md` en el arbol para saberlo.
+pub fn sprint_id_de_la_rama(refname: &str) -> Option<String> {
+    refname.rsplit_once("secure/sprint/").map(|(_, id)| id.to_string())
+}
+
 /// La pasada 5 sobre **un** sprint: lo crea del otro lado si no esta, le anota
-/// su `key`, y le mete adentro los issues que le falten.
+/// su `key`, y le mete adentro los issues que le falten. Todo lo que necesita
+/// —titulo, `key`, `items`— sale de la composicion, en el panorama.
 ///
 /// Extraida porque la usan dos: la ventana, donde el sprint es el suyo, y
 /// `bootstrap`, que resuelve los que ninguna ventana cubrio. Un sprint sin
-/// ventana no tenia camino al proveedor —ver la task `ACC-299`— y copiar esto
-/// habria sido la tercera copia de la misma pasada.
-///
-/// **La membresia se lee de la composicion, no del `.sprint.md`.** `items` en
-/// el `.sprint.md` de la ventana quedo vestigial desde que `window_files`
-/// recorta con `product.yaml`, y leerlo aca significaba mandar al proveedor
-/// una lista que ya podia estar vieja. El `.sprint.md` sigue vivo para el
-/// nombre y el `key` — eso es lo que falta de la mudanza — pero la pregunta
-/// *"quien esta adentro"* la contesta el panorama. Ver `concepts/composition.md`.
+/// ventana no tenia camino al proveedor, y copiar esto habria sido la tercera
+/// copia de la misma pasada.
 ///
 /// **Y lo que la composicion nombra puede ser el slug de algo que esta misma
 /// corrida acaba de asignar.** El renombre de la pasada 1 corre sobre `tmp` — la
@@ -518,7 +491,6 @@ pub(crate) fn resolve_sprint(
     repo: &Path,
     tmp: &Path,
     id: &str,
-    file: &str,
     board: &dyn Board,
     board_id: &str,
     recien_asignados: &[Assigned],
@@ -534,28 +506,23 @@ pub(crate) fn resolve_sprint(
     agregar_solo: Option<&[String]>,
     dry_run: bool,
 ) -> Result<SprintResult> {
-    let path = tmp.join(file);
-    let text = std::fs::read_to_string(&path).with_context(|| format!("leyendo {file}"))?;
     let producto = worklist_core::product::leer(repo, worklist_core::git::PANORAMA)?;
     let sprint = producto
         .sprint(id)
         .with_context(|| format!("la composicion no tiene el sprint `{id}`"))?;
+    // Lo que todavia no cruzo **no se compara**: si `resolver_id` no le
+    // encuentra clave, es un `@slug` que el proveedor no puede tener, y
+    // mandarlo seria mandarle un slug en vez de una clave.
     let declared: Vec<String> = sprint
         .items
         .iter()
-        .map(|item| {
-            recien_asignados
-                .iter()
-                .find(|a| &a.slug == item)
-                .map(|a| a.key.clone())
-                .unwrap_or_else(|| item.clone())
-        })
+        .filter_map(|item| resolver_id(tmp, item, recien_asignados))
         .collect();
     let members = sprint_members(tmp, &declared)?;
     if dry_run {
         return Ok(SprintResult {
             id: id.to_string(),
-            key: sprint_key(&text).unwrap_or_else(|| "(dry-run)".into()),
+            key: sprint.key.clone().unwrap_or_else(|| "(dry-run)".into()),
             created: false,
             added: members,
             // El `--dry-run` no habla con el proveedor, asi que no puede saber
@@ -568,13 +535,16 @@ pub(crate) fn resolve_sprint(
     // El nombre del otro lado lo escribe el worklist, con la regla de siempre:
     // nunca el id solo. Y no es la llave —esa es el `key`— asi que cambiarlo
     // no rompe nada.
-    let nombre = sprint_name(id, title_of(&text).as_deref());
-    let (key, created) = match sprint_key(&text) {
-        Some(k) => (k, false),
+    let nombre = sprint_name(id, Some(sprint.titulo.as_str()));
+    let (key, created) = match &sprint.key {
+        Some(k) => (k.clone(), false),
         None => {
             let (k, created) = board.create_or_find_sprint(board_id, &nombre)?;
-            std::fs::write(&path, with_sprint_key(&text, &k)?)?;
-            worklist_core::commit_all(tmp, &format!("sprint: {id} -> {k}"))?;
+            // Si `tmp` es el panorama —el caso de `bootstrap`— esto lo anota
+            // ya mismo. Si es una ventana, el archivo no esta y no hace nada:
+            // el marcador de abajo es lo que lo lleva, via la propagacion.
+            worklist_core::product::anotar_key(tmp, id, &k)?;
+            worklist_core::commit_marker(tmp, &format!("sprint: {id} -> {k}"))?;
             (k, created)
         }
     };
@@ -630,47 +600,26 @@ pub(crate) fn resolve_sprint(
     })
 }
 
-pub fn sprint_file(repo: &Path, rev: &str) -> Result<Option<(String, String)>> {
-    let listing = git_output(repo, &["ls-tree", "-r", "--name-only", rev])?;
-    let mut found: Vec<(String, String)> = listing
-        .lines()
-        .filter_map(|name| {
-            let id = name.strip_prefix("_sprints/")?.strip_suffix(".sprint.md")?;
-            (!id.contains('/')).then(|| (id.to_string(), name.to_string()))
-        })
-        .collect();
-    match found.len() {
-        0 => Ok(None),
-        1 => Ok(Some(found.remove(0))),
-        n => bail!(
-            "{rev} lleva {n} sprints y una ventana lleva uno: {}",
-            found.iter().map(|(_, f)| f.as_str()).collect::<Vec<_>>().join(", ")
-        ),
+/// Traduce un id de la composicion a su clave actual, si la tiene.
+///
+/// Una clave se queda como esta. Un slug se busca primero entre lo que esta
+/// misma corrida acaba de asignar, y si no aparece ahi, en el historial de la
+/// rama: la composicion puede seguir nombrando el slug de algo que esta
+/// ventana ya renombro en un push anterior, porque ese renombre no le llega
+/// hasta que la propagacion corre. `None` es que de verdad no cruzo todavia.
+fn resolver_id(tmp: &Path, id: &str, recien_asignados: &[Assigned]) -> Option<String> {
+    if !worklist_core::is_unassigned(id) {
+        return Some(id.to_string());
     }
-}
-
-/// El `key` del frontmatter del sprint: su id en el proveedor. **Su ausencia
-/// es que el sprint todavia no existe del otro lado**, igual que un archivo de
-/// item que todavia lleva slug.
-pub(crate) fn sprint_key(text: &str) -> Option<String> {
-    let end = text.find("\n---\n")?;
-    let re = regex::Regex::new(r"(?m)^key:\s*(\S+)$").unwrap();
-    re.captures(&text[..end]).map(|c| c[1].to_string())
-}
-
-/// Anota el `key` en el frontmatter, despues de `items` si esta y al final si
-/// no. Es el unico campo del sprint que escribe el servidor.
-pub(crate) fn with_sprint_key(text: &str, key: &str) -> Result<String> {
-    let Some(end) = text.find("\n---\n") else {
-        bail!("el sprint no tiene frontmatter donde anotar su clave");
-    };
-    let (fm, rest) = text.split_at(end);
-    let re = regex::Regex::new(r"(?m)^items:.*$").unwrap();
-    let fm = match re.find(fm) {
-        Some(m) => format!("{}\nkey: {key}{}", &fm[..m.end()], &fm[m.end()..]),
-        None => format!("{fm}\nkey: {key}"),
-    };
-    Ok(format!("{fm}{rest}"))
+    if let Some(a) = recien_asignados.iter().find(|a| a.slug == id) {
+        return Some(a.key.clone());
+    }
+    let log = git_output(tmp, &["log", "--format=%s"]).ok()?;
+    log.lines().find_map(|subject| {
+        worklist_core::git::rename_subject(subject)
+            .filter(|(slug, _)| slug == id)
+            .map(|(_, key)| key)
+    })
 }
 
 /// Los miembros del sprint: la clausura de `items` sobre `parent`.
@@ -856,7 +805,7 @@ pub struct BootstrapResult {
     pub refname: String,
     pub order: Vec<String>,
     pub assigned: Vec<Assigned>,
-    /// Los sprints que no tenian `key`, resueltos al final. Ver `ACC-299`.
+    /// Los sprints que no tenian `key`, resueltos al final.
     pub sprints: Vec<SprintResult>,
     pub old_head: String,
     pub new_head: String,
@@ -901,7 +850,12 @@ pub fn bootstrap(
 ) -> Result<Option<BootstrapResult>> {
     let head = git_output(repo, &["rev-parse", refname])?.trim().to_string();
     let raw = pending_requests(repo, &head)?;
-    let sprints_pendientes = sprints_del_arbol(repo, &head)?;
+    // Todos los sprints de la composicion, tengan `key` o no: la idempotencia
+    // la da `resolve_sprint`, que lee que hay adentro y manda solo lo que
+    // falta — filtrar aca lo trataria como a un item, y un sprint tambien es
+    // una membresia que cambia mientras el sprint vive.
+    let sprints_pendientes: Vec<String> =
+        worklist_core::product::leer_o_vacio(repo, &head)?.sprints.into_iter().map(|s| s.id).collect();
     if raw.is_empty() && sprints_pendientes.is_empty() {
         return Ok(None);
     }
@@ -954,14 +908,14 @@ pub fn bootstrap(
 
         // Y los sprints al final: meterles los issues adentro necesita que sus
         // items ya tengan clave. Es la misma restriccion topologica que ordena
-        // la epica antes que sus tasks, un escalon mas arriba. Ver `ACC-299`.
+        // la epica antes que sus tasks, un escalon mas arriba.
         let mut sprints = Vec::new();
-        for (id, file) in &sprints_pendientes {
+        for id in &sprints_pendientes {
             // `None`: estos sprints **nunca tuvieron ventana**, asi que su
             // membresia no viajo nunca y lo que el board no tiene falta de
             // verdad. Ver el parametro.
             sprints.push(resolve_sprint(
-                repo, &tmp, id, file, board, board_id, &assigned, None, dry_run,
+                repo, &tmp, id, board, board_id, &assigned, None, dry_run,
             )?);
             ancla.avanzar(&tmp);
         }
@@ -1212,8 +1166,8 @@ pub const SPRINT_NAME_MAX: usize = 29;
 /// Diez de los veintidos sprints de este repo se pasaban del limite, asi que
 /// no es un caso de borde — el mas largo mide 65.
 ///
-/// **Y es deterministico**, que es lo que lo hace seguro: mientras el
-/// `.sprint.md` no tenga `key`, este nombre es con lo que se busca antes de
+/// **Y es deterministico**, que es lo que lo hace seguro: mientras la
+/// composicion no tenga `key`, este nombre es con lo que se busca antes de
 /// crear. Dos corridas que produjeran nombres distintos duplicarian el sprint.
 /// Ver `concepts/sync.md` seccion "Se busca por nombre exactamente cuando no
 /// hay `key`".

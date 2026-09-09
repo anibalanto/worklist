@@ -205,29 +205,11 @@ pub fn resolve(dir: &Path, spy: &Spy) -> worklist_provider::assign::WindowResult
         .unwrap()
         .unwrap()
 }
-/// Escribe el `.sprint.md` de una ventana. `key` es el id del proveedor, que
-/// **ausente significa que el sprint no existe del otro lado**.
-/// Escribe el sprint **en las dos formas**, que es donde esta la migracion.
-///
-/// La composicion —`.metadata/product.yaml`— es de donde el recorte lee desde
-/// `ACC-305`. El `.sprint.md` sigue porque las pasadas que sincronizan sprints
-/// todavia lo leen, y se va con ellas. Escribir las dos es lo que deja el arbol
-/// verde **durante** la mudanza en vez de al final.
+/// El sprint de una ventana. `key` es el id del proveedor, que **ausente
+/// significa que el sprint no existe del otro lado**. Alias de `componer`:
+/// existen dos nombres porque asi se leia mejor en cada lugar que lo llama.
 pub fn sprint(repo: &Path, id: &str, title: &str, items: &[&str], key: Option<&str>) {
     componer(repo, id, title, items, key);
-    std::fs::create_dir_all(repo.join("_sprints")).unwrap();
-    let k = match key {
-        Some(k) => format!("key: {k}\n"),
-        None => String::new(),
-    };
-    std::fs::write(
-        repo.join(format!("_sprints/{id}.sprint.md")),
-        format!(
-            "---\ntitle: {title}\nstatus: in-progress\nitems: [{}]\n{k}created_at: 2026-09-04T00:00:00Z\nupdated_at: 2026-09-04T00:00:00Z\n---\n\ncuerpo del sprint\n",
-            items.join(", ")
-        ),
-    )
-    .unwrap();
 }
 
 /// El contenido de un archivo en un commit, sin working tree de por medio.
@@ -266,7 +248,7 @@ pub fn componer(repo: &Path, id: &str, title: &str, items: &[&str], key: Option<
     producto.sprints.retain(|s| s.id != id);
     producto.sprints.push(worklist_core::product::Sprint {
         id: id.to_string(),
-        name: title.chars().take(19).collect(),
+        titulo: title.to_string(),
         status: "in-progress".into(),
         key: key.map(|k| k.to_string()),
         items: items.iter().map(|s| s.to_string()).collect(),
