@@ -5,6 +5,7 @@ endpoint:
     accepted:
     - agree:
       - Anibal
+      - anibal
       - test
       link: capture 069c137b8253c75b6ee9840e20cf81ee
       hash: 2e565549a2e18f15d6e71f6dd0be333f122462455d6a80328a28345a1f3412e8

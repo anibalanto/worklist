@@ -54,10 +54,11 @@ fn read_items(repo: &Path, rev: &str) -> Result<HashMap<String, Item>> {
 
 /// Los archivos que lleva la ventana del sprint `sprint_id` en `rev`.
 ///
-/// El `.sprint.md`, los items que declara **con todo su subarbol**, los
+/// Los items que la composicion declara **con todo su subarbol**, los
 /// ancestros de cada uno —en la practica la epica, que viaja de solo lectura
 /// para que la cadena `parent` cierre adentro— y el vocabulario de estados,
 /// que viaja por lo mismo: el cliente no tiene el panorama de donde leerlo.
+/// La composicion misma no viaja: es del servidor.
 pub fn window_files(repo: &Path, rev: &str, sprint_id: &str) -> Result<Vec<String>> {
     // El `items` sale de la composicion, que vive en el panorama de donde se
     // corta. **No entra a la ventana**: es del servidor, y una copia del lado

@@ -4,6 +4,7 @@ endpoint:
     link: path <
     accepted:
     - agree:
+      - anibal
       - test
       link: capture c93957f3991abf0262d452498f3c1426
       hash: 62e0cc772ab99bec393fc98063344071181d5620e566cd5dbbab9be6eb365a13
